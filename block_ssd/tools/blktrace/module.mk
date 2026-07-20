@@ -1,0 +1,7 @@
+BLKTRACE_SRCS = tools/blktrace/blktrace.c
+BLKTRACE_DEPS = $(BLKTRACE_SRCS:.c=.d)  # 对应的依赖文件名
+BLKTRACE_OBJS = $(BLKTRACE_SRCS:.c=.o)
+
+ALL_SRCS += $(BLKTRACE_SRCS)
+ALL_DEPS += $(BLKTRACE_DEPS)
+ALL_OBJS += $(BLKTRACE_OBJS)

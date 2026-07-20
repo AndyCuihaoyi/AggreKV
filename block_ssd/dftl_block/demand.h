@@ -1,0 +1,158 @@
+#ifndef __DFTL_H__
+#define __DFTL_H__
+
+#include "dftl_types.h"
+#include "dftl_utils.h"
+#include "../tools/lru_list.h"
+#include "../tools/rte_ring/rte_ring.h"
+#include "cache.h"
+#include "bm.h"
+#include "write_buffer.h"
+#include <stdint.h>
+
+extern uint64_t extra_mem_lat;
+
+#define ENTRY_SIZE 8
+
+#define EPP (PAGESIZE / ENTRY_SIZE) // Number of table entries per page
+#define D_IDX (lpa / EPP)           // Idx of directory table
+#define P_IDX (lpa % EPP)           // Idx of page table
+#ifdef HOT_CMT
+#define D_IDX_HOT (new_lpa / EPP)
+#define P_IDX_HOT (new_lpa % EPP)
+#define IDX_TO_LPA(d_idx, p_idx) ((d_idx) * EPP + (p_idx))
+#endif
+
+#define CLEAN 0
+#define DIRTY 1
+
+#define QUADRATIC_PROBING(h, c) ((h) + (c) + (c) * (c))
+#define LINEAR_PROBING(h, c) (h + c)
+
+#define PROBING_FUNC(h, c) QUADRATIC_PROBING(h, c)
+
+#define D_ENV(p_algo) ((demand_env *)(p_algo->env))
+
+// Page table entry
+typedef struct __attribute__((packed)) pt_struct
+{
+    ppa_t ppa; // Index = lpa
+#ifdef STORE_KEY_FP
+    fp_t key_fp;
+#endif
+} pte_t;
+
+// Hot page table entry
+// 1. 配置状态数量（可选：2/4/8/16）
+#define STATE_NUM 2 // 可修改：2/4/8/16
+#define MIN_STATE 0
+// 2. 根据状态数量自动计算所需的最小比特数（替代硬编码的4）
+#if STATE_NUM == 2
+#define STATE_BITS 1    // 2^1=2 种状态 → 1bit
+#define DEFAULT_STATE 1 // 3/4规则：2种状态默认最高（1）
+#elif STATE_NUM == 4
+#define STATE_BITS 2    // 2^2=4 种状态 → 2bit
+#define DEFAULT_STATE 2 // 4种状态默认第3级（2）
+#elif STATE_NUM == 8
+#define STATE_BITS 3    // 2^3=8 种状态 → 3bit
+#define DEFAULT_STATE 5 // 8种状态默认第6级（5）
+#elif STATE_NUM == 16
+#define STATE_BITS 4     // 2^4=16 种状态 → 4bit
+#define DEFAULT_STATE 11 // 16种状态默认第12级（11）
+#else
+#error "STATE_NUM must be 2,4,8,16"
+#endif
+typedef struct __attribute__((packed)) hot_pt_struct
+{
+    lpa_t lpa;
+    ppa_t ppa;                  // Index = lpa
+    uint8_t state : STATE_BITS; // 4bit状态变量（热度等级）
+#ifdef VERIFY_CACHE
+    KEYT real_key;
+#endif
+#ifdef STORE_KEY_FP
+    fp_t key_fp;
+#endif
+} h_pte_t;
+
+extern KEYT *real_keys;
+
+// Cache mapping table data strcuture
+typedef struct cmt_struct
+{
+    int32_t idx;
+    pte_t *pt;
+    ppa_t t_ppa;
+
+    bool state; // CLEAN / DIRTY
+    bool is_flying;
+
+    struct rte_ring *retry_q;
+    struct rte_ring *wait_q;
+    NODE *lru_ptr;
+    bool *is_cached;
+    uint32_t cached_cnt;
+    uint32_t dirty_cnt;
+
+    uint32_t hit_cnt;
+    uint32_t valid_cnt;
+    uint32_t multi_hit_cnt;
+    uint8_t *cnt_map;
+} cmt_t;
+
+typedef struct demand_env
+{
+    uint32_t num_page;
+    uint32_t num_grain;
+    uint32_t max_cache_entry;
+    uint32_t num_block;
+    uint32_t p_p_b;
+    uint32_t num_tblock;
+    uint32_t num_tpage;
+    uint32_t num_dblock;
+    uint32_t num_dpage;
+    uint32_t num_dgrain;
+    uint32_t nr_pages_optimal_caching;
+    uint32_t num_max_cache;
+    uint32_t real_max_cache;
+    uint32_t max_write_buf;
+    uint32_t max_try;
+
+    /* for statistics */
+    uint64_t num_rd_wb_hit;
+    uint64_t num_rd_data_rd;
+    uint64_t num_rd_data_miss_rd;
+    uint64_t num_data_gc;
+    uint64_t num_gc_flash_read;
+    uint64_t gc_cmt_total;
+    uint64_t num_gc_mapping_hit;
+    uint64_t num_gc_flash_write;
+    uint64_t r_hash_collision_cnt[MAX_HASH_COLLISION + 1];
+    uint64_t w_hash_collision_cnt[MAX_HASH_COLLISION + 1];
+
+    /* components */
+    demand_cache *pd_cache;
+    w_buffer_t *pw_buffer;
+    block_mgr_t *pb_mgr;
+} demand_env;
+
+/* extern variables */
+extern algorithm __demand;
+extern demand_env d_env;
+
+// dftl.c
+uint32_t demand_create(algorithm *, lower_info *);
+void demand_destroy(algorithm *, lower_info *);
+lpa_t get_lpa(demand_cache *pd_cache, KEYT key, void *_h_params);
+uint32_t demand_set(algorithm *, request *const);
+uint32_t demand_get(algorithm *, request *const);
+uint32_t demand_remove(algorithm *, request *const); // not implemented
+
+// dftl_range.c
+uint32_t demand_range_query(algorithm *, request *const);
+bool range_end_req(algorithm *, request *);
+
+// dftl_utils.c
+void cache_show(char *dest);
+
+#endif // __DFTL_H__

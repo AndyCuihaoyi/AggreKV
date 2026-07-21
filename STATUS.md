@@ -29,7 +29,7 @@ The canonical source tree lives on GitHub. A persistent, DOI-indexed archive is 
 | Public, immutable archival repository | Satisfied |
 | Long-term availability | Satisfied |
 | Immutability / versioning | Satisfied |
-| Permanent identifier (DOI) | Satisfied |
+| Permanent identifier (DOI) | Pending (filled after the GitHub `v1.0.0` Release triggers Zenodo integration) |
 | Open license that allows comparison and extension | Satisfied |
 | README referencing the paper | Satisfied |
 
@@ -42,8 +42,6 @@ The Zenodo DOI and record URL will be filled in once the record is published. Th
 3. Publish the full release on Zenodo (or push the `aggrekv-v1.0-artifact` tag to GitHub so Zenodo creates a versioned record). The DOI from step 1 is preserved on the published record.
 
 Do not delete a published Zenodo record — instead upload a new version (Zenodo's "New version" button). New versions receive a DOI suffix (e.g. `.v2`) but the canonical DOI of the original record remains valid.
-
----
 
 ---
 
@@ -72,8 +70,7 @@ The source-code record is created automatically by Zenodo's GitHub-integration w
 | **Consistent**: terminology, file layout, and naming are coherent across docs and code | Satisfied | Top-level `test.sh`; uniform sub-module naming (`Makefile` + `run_*.sh` + per-module results dir); doc filenames match the CASES-prescribed list |
 | **Complete**: includes all code and data necessary to exercise the artifact | Satisfied | `hash_kvssd/`, `lsmtree_kvssd/`, `block_ssd/` source trees; the 6.2 GB blktrace dataset is fetched separately per `INSTALL.md` §3.1 |
 | **Exercisable**: scripts can be executed to completion and produce well-formed output | Satisfied | `test.sh` (root-level thin orchestrator); the three sub-drivers each in their own module |
-| **Evidence of verification**: each script documents its expected output path, and `test.sh` prints a clear pass/fail marker | Satisfied | `README.md` §"Outputs and How to Interpret Them" lists the per-module summary files; success marker is `bash test.sh` exiting 0 with `[TEST OK]` |
-| Allowed license for review | Satisfied | `LICENSE` (BSD 3-Clause) |
+| **Evidence of verification & validation**: each sub-driver's expected output path is documented, and `test.sh` prints a clear pass/fail marker | Satisfied | `hash_kvssd/hash_kvssd_results/summary/summary.txt`; `lsmtree_kvssd/lsmtree_test_results/summary.txt`; `block_ssd/blktrace_test_results/test_*.log` and `block_ssd/blktrace_summary/summary_<timestamp>.txt` (full list in `README.md` §"Outputs and How to Interpret Them"); success marker is `bash test.sh` exiting 0 with `[TEST OK] all three sub-drivers finished` |
 
 Under the Functional badge, verification means the artifact can be **exercised and produces well-formed output**. It does **not** require that the output match the paper's numbers. Numerical alignment with the paper is the separate Reproduced badge, which we are not applying for. See `README.md` §"Outputs and How to Interpret Them" for what counts as a successful run.
 
@@ -84,10 +81,10 @@ Under the Functional badge, verification means the artifact can be **exercised a
 - **Single-machine run.** All numbers in the paper were captured on one machine; cross-machine variance is not characterized.
 - **blktrace dataset size.** `block_ssd/blktrace/` is 6.2 GB; it is not in the GitHub repo and is fetched separately from a second Zenodo dataset record per `INSTALL.md` §3.1. Reviewers who only want to exercise the AggreKV and LSM-tree baselines may skip that step — `run_blktrace_tests.sh` then exits 0 with a clear skip message.
 - **YCSB workloads are generated deterministically** from the bundled `mt19937` seeds inside each test driver — no external RocksDB installation is required.
-- **The AggreKV hot/cold data-segregation flags (`-DHOT_CMT -DADAPTIVE_MEM -DDATA_SEGREGATION`)** must remain enabled in the published build. They are passed to gcc via the `PROFILE_*_CFLAGS` variables in `hash_kvssd/run_all_hashkvssd_tests.sh`; do not edit those variables. Disabling any one of them regresses AggreKV into a plain hash-based KV-SSD baseline. See `REQUIREMENTS.md` §"Disallowed Modifications".
+- **The AggreKV hot/cold data-segregation flags (`-DHOT_CMT -DADAPTIVE_MEM -DDATA_SEGREGATION`)** must remain enabled in the published build. They are passed to gcc via the `PROFILE_*_CFLAGS` variables in `hash_kvssd/run_all_hashkvssd_tests.sh`; disabling any one of them regresses AggreKV into a plain hash-based KV-SSD baseline. See `REQUIREMENTS.md` §"Disallowed Modifications".
 
 ---
 
 ## 5. License
 
-BSD 3-Clause. See `LICENSE`. Reviewers are explicitly granted the rights to run the artifact for evaluation, modify it for personal evaluation, and compare it against other artifacts.
+BSD 3-Clause. See `LICENSE`. The license terms permit running, modifying, and comparing the artifact for evaluation.

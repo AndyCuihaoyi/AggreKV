@@ -1,16 +1,14 @@
 # INSTALL
 
-This document walks a reviewer from a fresh Linux x86_64 box to a fully built artifact that is ready to run `bash test.sh`. It does not restate the hardware / NUMA / RAM constraints — those are in `REQUIREMENTS.md`.
+This document walks through installing OS dependencies, obtaining the source, and building the three sub-modules on a fresh Linux x86_64 box so that `bash test.sh` can run from the repository root. Hardware / NUMA / RAM constraints live in `REQUIREMENTS.md`.
 
 **Sections in order:**
 
-1. OS-level dependencies (`apt install`).
-2. `git clone` the artifact.
+1. OS-level dependencies.
+2. `git clone` the source.
 3. Prepare the Block-SSD baseline (download 44 blktrace files via `download-blktrace.sh`, build `block_ssd`, verify).
 4. First run (`bash test.sh`).
 5. Troubleshooting.
-
-If the reviewer does not need the Block-SSD baseline, §3 can be skipped entirely — `test.sh` will then run only the `hash_kvssd` and `lsmtree_kvssd` baselines.
 
 ---
 
@@ -34,32 +32,29 @@ If `numactl` is not available in your distribution, omit it from the line above;
 ## 2. Obtain the source
 
 ```bash
-git clone <TODO: GitHub repo URL> aggrekv-artifact
-cd aggrekv-artifact
+git clone https://github.com/AndyCuihaoyi/AggreKV.git AggreKV
+cd AggreKV
 ```
 
 After cloning, the top of the tree looks like:
 
 ```
-aggrekv-artifact/
+AggreKV/
 ├── README.md
 ├── STATUS.md
 ├── REQUIREMENTS.md
-├── INSTALL.md          ← this file
+├── INSTALL.md
 ├── LICENSE
 ├── test.sh
 ├── hash_kvssd/
 ├── lsmtree_kvssd/
 └── block_ssd/
 ```
-
-The persistent, DOI-indexed archive that the CASES submission form references is the Zenodo record of this GitHub repo. The DOI placeholder will be filled in once the Zenodo record is published; the DOI is recorded in `STATUS.md` §"Artifacts Available".
-
 ---
 
 ## 3. Prepare the Block-SSD baseline
 
-This section does three things in order: fetch the 6.2 GB blktrace dataset, build the `block_ssd` sub-module, and verify the two expected binaries exist. The `hash_kvssd` and `lsmtree_kvssd` sub-modules do **not** need any pre-build — their sub-drivers build themselves on first invocation — so they are not touched in this section.
+This section does three things in order: fetch the 6.2 GB blktrace dataset, build the `block_ssd` sub-module, and verify the expected binaries exist. The `hash_kvssd` and `lsmtree_kvssd` sub-modules do **not** need any pre-build — their sub-drivers build themselves on first invocation — so they are not touched in this section.
 
 ### 3.1 Download the blktrace dataset
 
@@ -68,32 +63,21 @@ The `block_ssd` baseline replays 22 RocksDB-derived blktrace CSV files (≈ 6.2 
 - Zenodo record: <https://zenodo.org/records/21455311>
 - Zenodo DOI: <https://doi.org/10.5281/zenodo.21455311>
 
-The record ships the 44 files as **individual assets** (22 `.csv` + 22 `.cnt`, total 6.12 GB). The artifact ships a one-shot downloader that puts them under `block_ssd/blktrace/` with stable filenames:
+The record ships the 44 files as **individual assets** (22 `.csv` + 22 `.cnt`, total 6.12 GB). The repo ships a one-shot downloader that puts them under `block_ssd/blktrace/` with stable filenames:
 
 ```bash
 # From the repository root
 bash download-blktrace.sh
 ```
 
-The script:
 
-- runs **4 `wget` jobs in parallel** (override with `PARALLEL=8 bash download-blktrace.sh`);
-- uses `wget -nc` so re-runs are safe — partial files are resumed and intact files are not redownloaded;
-- **verifies the SHA256 of every file** against an embedded manifest after download; any mismatch causes the script to exit non-zero (re-running resumes partial transfers).
-
-A successful run prints `[OK] All 44 files verified.` and exits 0. To re-confirm the layout:
+To re-confirm the layout:
 
 ```bash
 ls block_ssd/blktrace/ | wc -l      # expect 44
 ls block_ssd/blktrace/*.csv | wc -l # expect 22
 ls block_ssd/blktrace/*.cnt | wc -l # expect 22
 ```
-
-Each `.csv` must be paired with a same-name `.cnt` file (e.g. `rocksdb_overwrite_64000000_500000x8.csv` and `rocksdb_overwrite_64000000_500000x8.cnt`); `run_blktrace_tests.sh` reads the `.cnt` for `num_upper_level_kvops`.
-
-> If `wget` is not installed, install it with `sudo apt install wget`. The script does not require authentication and does not need an API token — the Zenodo record is fully public.
-
-If you do not want to run the Block-SSD baseline, skip this whole subsection. `run_blktrace_tests.sh` will detect that `block_ssd/blktrace/` is empty and exit 0 with a clear skip message — this is expected behaviour, not a failure, and the Functional badge still passes on the `hash_kvssd` + `lsmtree_kvssd` runs.
 
 ### 3.2 Build the `block_ssd` sub-module
 
@@ -106,7 +90,7 @@ The `block_ssd` sub-driver does **not** build its own binary; this step is requi
 This produces two binaries under `block_ssd/dftl_block/`:
 
 - `test_blktrace` — used by `run_blktrace_tests.sh`
-- `test_ext_mem_lat` — also built so the artifact ships the full set of binaries
+- `test_ext_mem_lat` — also built so the repo ships the full set of binaries
 
 ### 3.3 Verify build success
 
@@ -119,39 +103,21 @@ test -x block_ssd/dftl_block/test_blktrace \
 || echo "[INSTALL FAIL] one or more block_ssd binaries missing — re-run the make command above"
 ```
 
-A passing run prints:
-
-```
-[INSTALL OK] block_ssd binaries built — proceed to test.sh
-```
-
 ---
 
 ## 4. First run
 
-From the repository root:
+From the repository root, invoke the orchestrator with no arguments so each sub-driver uses its own defaults:
 
 ```bash
 bash test.sh
 ```
 
-`test.sh` invokes the three sub-drivers in order. If everything succeeds, it prints:
+This runs the validation experiments of all three sub-modules to completion:
 
-```
-[TEST OK] all three sub-drivers finished
-```
-
-and exits 0. If you skipped §3.1 (no blktrace dataset), the third step will instead print a multi-line skip message that begins with:
-
-```
-[block_ssd] blktrace dataset missing under ./blktrace/
-[block_ssd] To run the Block-SSD baseline, fetch the Zenodo archive ...
-[block_ssd] Skipping Block-SSD baseline (Functional badge does not require this step).
-```
-
-This is not a failure — the Functional run is still considered passing on the `hash_kvssd` + `lsmtree_kvssd` runs alone.
-
-`hash_kvssd` rebuilds itself at the start of each of its experiments (it `make clean`s and recompiles with the per-experiment CFLAGS), so the overall `test.sh` run can take a while; the per-experiment logs land under `hash_kvssd/hash_kvssd_results/`.
+- `hash_kvssd` runs nine experiment blocks (E1–E9), forcing a clean rebuild at the start of each one so the per-experiment CFLAGS take effect. Logs land under `hash_kvssd/hash_kvssd_results/`.
+- `lsmtree_kvssd` iterates its built-in workload set with the default key count. Logs land under `lsmtree_kvssd/lsmtree_test_results/`.
+- `block_ssd` replays every `.csv` paired with its same-name `.cnt` under `block_ssd/blktrace/`. Logs land under `block_ssd/blktrace_test_results/`.
 
 ---
 
@@ -165,7 +131,7 @@ This is not a failure — the Functional run is still considered passing on the 
 | `block_ssd` build fails with a gcc error | gcc is older than 9.4 | See `REQUIREMENTS.md` §"Software Environment". |
 | `bash test.sh` fails at step 1 (`hash_kvssd`) | gcc too old, or missing build dep | Inspect `hash_kvssd/hash_kvssd_results/logs/` for the failing experiment's log; the first compiler error is the root cause. |
 | `bash test.sh` fails at step 2 (`lsmtree_kvssd`) | build or runtime failure in `lsm_test` | Inspect `lsmtree_kvssd/lsmtree_test_results/` for the failing workload's log. |
-| `bash test.sh` fails at step 3 (`block_ssd`) | missing binary or missing dataset | If `test_blktrace` is missing, re-run §3.2. If the dataset is missing, fetch it via §3.1 — or accept the skip message and consider the Functional run as passing on the first two baselines. |
-| `bash test.sh` killed by the kernel (OOM) | RAM less than `REQUIREMENTS.md` §"Hardware Environment" recommends | The simulator may be swapping; check `vmstat 1` while a run is in progress. The Functional badge still passes on a non-zero exit (the run is "exercised and produces well-formed output" up to the OOM), but numerical alignment with the paper is not expected in this case. |
+| `bash test.sh` fails at step 3 (`block_ssd`) | missing binary or missing dataset | If `test_blktrace` is missing, re-run §3.2. If the dataset is missing, fetch it via §3.1. |
+| `bash test.sh` killed by the kernel (OOM) | RAM less than `REQUIREMENTS.md` §"Hardware Environment" recommends | The simulator may be swapping; check `vmstat 1` while a run is in progress. The run may still complete, but numerical results will not match the paper in this case. |
 | `Invalid cnt file content` in `run_blktrace_tests.sh` | blktrace extraction did not land `*.csv` and `*.cnt` side-by-side in `block_ssd/blktrace/` | Re-extract the dataset so both extensions sit in the same directory. |
 | AddressSanitizer errors during a run | an `_asan` target was built instead of the default one | ASan targets (`*_asan` in each sub-module's `Makefile`) are not used by `test.sh`. If you see ASan output, double-check the build command in §3.2 is exactly `make test_blktrace test_ext_mem_lat`. |

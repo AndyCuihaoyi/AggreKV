@@ -53,7 +53,6 @@ The `hash_kvssd` sub-driver hard-codes the glib header include paths `/usr/inclu
 
 - **None beyond the packages listed above.** No network access is required at build time.
 - The 6.2 GB blktrace dataset lives in a separate Zenodo dataset record (not in this GitHub repo). It is fetched by the reviewer per `INSTALL.md` §3.1, which runs the in-repo script `download-blktrace.sh` (44 individual file URLs with an embedded SHA256 manifest; 4 parallel `wget` jobs by default). Reviewers who do not need the Block-SSD baseline may skip that step — `run_blktrace_tests.sh` then exits 0 with a clear skip message.
-- The bundled `hash_kvssd/.run.log` (a sample log from an authors' run) is a small text file; it is the only artifact-internal log checked into the repo.
 - **No proprietary software, no closed-source toolchains, no commercial SDKs.**
 
 ---

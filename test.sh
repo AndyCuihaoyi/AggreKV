@@ -6,7 +6,7 @@
 #  sub-modules and runs that sub-module's own driver, in order.
 #
 #  To run a sub-module with non-default arguments, invoke that sub-module's driver
-#  directly — see README.md §8 for the script catalog.
+#  directly (the sub-driver headers document their own flag catalogs).
 #
 #  Exit code: 0 if all three sub-drivers exit 0; otherwise the failing
 #  sub-driver's exit code (and the script aborts at the first failure).

@@ -1,67 +1,77 @@
 # REQUIREMENTS
 
-> Aligned with the [artifact-eval.org](https://artifact-eval.org/guidelines) "software artifacts" checklist:
-> hardware / software / external dependencies / disallowed modifications.
+This document lists the hardware and software environment that the artifact runs on, the external dependencies it needs, and the constraints a reviewer should respect to keep the run comparable.
 
 ---
 
 ## 1. Hardware Environment
 
-> Note: this artifact is a **user-space simulator** (kernel-bypass, host-side); it does NOT require any NVMe/SSD hardware. All "SSD" behaviour is emulated in DRAM.
->
-> The table below lists **recommended** hardware only. The artifact has not been validated on hardware below these recommendations; reviewers should not assume lower-spec machines will run it successfully.
+The artifact is a user-space, kernel-bypass KV-SSD simulator. All "SSD" behaviour is emulated in DRAM; no real NVMe device is required.
 
 | Component   | Recommended |
 |-------------|-------------|
-| CPU         | 16+ cores   |
-| RAM         | 128 GB      |
-| NUMA        | single-socket preferred |
-| Disk (free) | 100 GB      |
-| Storage I/O | SSD recommended |
+| CPU         | 16+ physical cores, x86_64 |
+| RAM         | 256 GB |
+| NUMA        | Single NUMA node — bind the run to one node. Running across multiple NUMA nodes introduces cross-NUMA memory-access latency that is not modelled by the simulator, so cross-NUMA runs will not match the paper's numbers. |
+| Disk (free) | 100 GB at the location where the repo is cloned (the blktrace dataset alone is 6.2 GB; per-experiment result directories add several more GB). |
+| Storage I/O | SSD-class (the simulator itself is DRAM-resident, but the build and the per-experiment log writes benefit from SSD-class I/O). |
 
-
+If the recommended RAM is not available, the simulator may spill into swap. Swapping changes wall-clock latency by orders of magnitude and the resulting numbers will not match the paper. If swap activity is observed (`vmstat 1` shows non-zero `si`/`so` columns during a run), the run should be considered invalid for any cross-machine comparison; the Functional badge does, however, still pass as long as the scripts execute to completion and produce well-formed output.
 
 ---
 
 ## 2. Software Environment
 
-| Component   | Version / package                | Required? | Notes |
-|-------------|----------------------------------|-----------|-------|
-| OS          | Linux x86_64 (kernel ≥ 4.15)     | yes       | Tested on Ubuntu 20.04 LTS and 22.04 LTS. |
-| Compiler    | `gcc` ≥ 9.4 (`-std=gnu11` or newer) | yes     | Tested with gcc 9.4 / 11.4 / 13.2. |
-| Build tools | GNU `make` ≥ 4.0, POSIX `bash` ≥ 4 | yes     | |
-| Libraries   | `libglib2.0-dev` (≥ 2.64)         | yes       | `sudo apt install build-essential libglib2.0-dev` |
-| Tools       | `numactl`                         | opt  | Auto-fallback to `taskset -c 0` if absent (see INSTALL.md). |
-| ASan        | enabled at compile time in `hash_kvssd/Makefile` | opt | Only used for local debugging; neither smoke nor full reproduction enables ASan. |
+| Component   | Recommended package / version |
+|-------------|-------------------------------|
+| OS          | Ubuntu 22.04 LTS (kernel ≥ 5.4) |
+| Compiler    | `gcc` 11.4 (`-std=gnu11` or newer) |
+| Build tools | GNU `make` 4.3, POSIX `bash` 5.x |
+| Libraries   | `libglib2.0-dev` 2.72 (required by the `hash_kvssd` baseline; `block_ssd` and `lsmtree_kvssd` only link against `-lglib-2.0`, so on Debian/Ubuntu they don't strictly need the dev headers) |
+| Tools       | `numactl` (optional; if absent, scripts fall back to `taskset -c 0` for the `hash_kvssd` baseline; the `lsmtree_kvssd` and `block_ssd` baselines do not need it) |
 
-### Tested Platforms
-- Ubuntu 22.04 LTS (kernel 5.15), gcc 11.4, libglib 2.72 
+The single `apt install` line that covers everything:
 
+```bash
+sudo apt update
+sudo apt install -y build-essential libglib2.0-dev numactl
+```
+
+If `numactl` is not available in your distribution, omit it from the line above; the `hash_kvssd` sub-driver will print a warning and fall back to `taskset -c 0`.
+
+### Tested platform
+
+The artifact is built and run on the following platform:
+
+- Ubuntu 22.04 LTS (kernel 5.15), gcc 11.4, GNU make 4.3, bash 5.1, libglib 2.72, on a dual-socket Intel Xeon Gold 6430 with 218 GiB RAM, bound to a single NUMA node for every run.
+
+The `hash_kvssd` sub-driver hard-codes the glib header include paths `/usr/include/glib-2.0` and `/usr/lib/x86_64-linux-gnu/glib-2.0/include/` rather than using `pkg-config`. On non-Debian / non-x86_64 systems these paths may not exist and the build will fail until the script is edited. This is a portability limitation of the published build, not of the design.
 
 ---
 
 ## 3. External Dependencies
 
-- **None beyond the packages listed above.** No network access required at build time.
-- The bundled trace files under `block_ssd/blktrace/` are the only dataset inputs; they are part of this artifact and need no download.
-- **No proprietary software / no closed-source toolchains / no commercial SDKs.**
+- **None beyond the packages listed above.** No network access is required at build time.
+- The 6.2 GB blktrace dataset lives in a separate Zenodo dataset record (not in this GitHub repo). It is fetched by the reviewer per `INSTALL.md` §3.1, which runs the in-repo script `download-blktrace.sh` (44 individual file URLs with an embedded SHA256 manifest; 4 parallel `wget` jobs by default). Reviewers who do not need the Block-SSD baseline may skip that step — `run_blktrace_tests.sh` then exits 0 with a clear skip message.
+- The bundled `hash_kvssd/.run.log` (a sample log from an authors' run) is a small text file; it is the only artifact-internal log checked into the repo.
+- **No proprietary software, no closed-source toolchains, no commercial SDKs.**
 
 ---
 
 ## 4. Disallowed Modifications
 
-The reviewer is asked **NOT** to modify the following in order for the smoke test to remain comparable to the paper's claims:
+The reviewer is asked **NOT** to modify the following in order for the run to remain comparable to the paper:
 
-- Do **not** edit `hash_kvssd/Makefile` flags `-DHOT_CMT -DADAPTIVE_MEM -DDATA_SEGREGATION` — these define the AggreKV configuration under test.
-- Do **not** swap the compiler (clang may miscompile the `__builtin_prefetch` / atomic built-ins used by the LSM-tree layer).
-- Do **not** enable ASan during the timed run — it changes latency by 5–10×.
+- Do **not** edit the `PROFILE_*_CFLAGS` variables in `hash_kvssd/run_all_hashkvssd_tests.sh`. These variables pass `-DHOT_CMT -DADAPTIVE_MEM -DDATA_SEGREGATION` to gcc at build time; removing any one regresses AggreKV into a plain hash-based KV-SSD baseline.
+- Do **not** swap the compiler. The codebase uses `__builtin_prefetch` and atomic built-ins that gcc handles correctly; clang may miscompile them in the LSM-tree layer.
+- Do **not** enable AddressSanitizer (`_asan` targets) during a timed run. ASan changes latency by 5–10× and is intended for debugging only.
 
-Modifications outside these (e.g., kernel tuning, swap, /tmp size) are allowed but should be noted when comparing numbers to the paper.
+Modifications outside these (e.g., kernel tuning, swap configuration, `/tmp` size, choice of NUMA node) are allowed but should be noted when comparing numbers to the paper.
 
 ---
 
 ## 5. Run-Output Notes
 
-- All test drivers write to per-experiment working directories under each module's root (e.g., `hash_kvssd/hash_kvssd_results/`). These are excluded from the Zenodo archive (regenerated by each sub-driver).
-- All summary outputs (CSV / TXT) are deterministic under the authors' test environment (the simulator seeds `mt19937` deterministically). Outputs may vary across different machines / kernel versions / library versions; this is acceptable for the Functional badge.
-- Re-running a script overwrites prior outputs in-place; no manual cleanup is required.
+- All sub-drivers write to per-experiment working directories under each module's root (e.g., `hash_kvssd/hash_kvssd_results/`). These are `.gitignore`d and regenerated by each sub-driver.
+- All summary outputs (CSV / TXT) are deterministic under a fixed machine (the simulator seeds `mt19937` deterministically). Outputs may vary across different machines, kernel versions, and library versions; this is acceptable for the Functional badge.
+- Re-running a script overwrites prior outputs in place; no manual cleanup is required.

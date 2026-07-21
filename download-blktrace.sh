@@ -12,11 +12,16 @@
 #  manifest embedded below (computed from the authors' upload on 2026-07-21)
 #  and exits non-zero on any mismatch.
 #
+#  Progress: each parallel download prints a one-line "[start] / [done] /
+#  [skip]" message to stderr (interleaved but readable), followed by the
+#  SHA256 verification phase printing "[OK]" / "[MISMATCH]" per file.
+#
 #  Re-running this script is safe:
 #    - 4 parallel wget jobs (PARALLEL=4 by default; override as
 #      PARALLEL=8 bash download-blktrace.sh)
 #    - each wget uses -nc (no-clobber); partial files are resumed on retry
-#    - already-correct files are skipped after a successful sha256 verify
+#    - already-on-disk files are reported as [skip] (sha256 verifies them
+#      again in the next phase)
 #
 #  Tested with wget 1.21 + bash 5.x + sha256sum on Ubuntu 22.04 LTS.
 # ============================================================================
@@ -166,9 +171,17 @@ xargs -P "${PARALLEL}" -n 2 bash -c '
     url="$1"
     name="$2"
     out="${DEST}/${name}"
-    if [[ ! -f "${out}" ]] || [[ ! -s "${out}" ]]; then
-        wget -nc -q --tries=5 --retry-connrefused --timeout=60 \
-             -O "${out}" "${url}"
+    if [[ -f "${out}" ]] && [[ -s "${out}" ]]; then
+        printf "  [skip] %s (already on disk)\n" "${name}" >&2
+    else
+        printf "  [start] %s\n" "${name}" >&2
+        if wget -nc --tries=5 --retry-connrefused --timeout=60 \
+               -O "${out}" "${url}"; then
+            printf "  [done]  %s\n" "${name}" >&2
+        else
+            printf "  [FAIL]  %s\n" "${name}" >&2
+            exit 1
+        fi
     fi
 ' _ < "${TMP_URL_LIST}"
 

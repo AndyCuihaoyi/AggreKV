@@ -119,7 +119,7 @@ Each sub-driver writes to its own results directory:
 | Sub-module       | Output directory                              | Key summary file                                |
 |------------------|-----------------------------------------------|--------------------------------------------------|
 | `hash_kvssd`     | `hash_kvssd/hash_kvssd_results/`              | `summary/summary.txt`, `summary/summary.csv`     |
-| `lsmtree_kvssd`  | `lsmtree_kvssd/lsmtree_test_results/`         | `summary.txt`, per-workload `*.log` files, `test_config.txt` |
+| `lsmtree_kvssd`  | `lsmtree_kvssd/lsmtree_test_results/`         | `summary.txt`, per-workload `*.log` files |
 | `block_ssd`      | `block_ssd/blktrace_test_results/` and `block_ssd/blktrace_summary/` | `summary/summary_<timestamp>.txt` |
 
 A successful run means each script ran to completion and produced well-formed output under its own results directory. 

@@ -45,17 +45,6 @@ echo " Workloads:        ${WORKLOADS[*]}"
 echo "========================================"
 echo ""
 
-# Save test configuration
-cat > "$RESULTS_DIR/test_config.txt" << EOF
-========================================
-LSM-tree Test Configuration
-========================================
-Date: $(date)
-KV pairs: $NUM_KV
-Workloads: ${WORKLOADS[*]}
-========================================
-EOF
-
 # Clean and build
 echo "[$(date '+%H:%M:%S')] Cleaning previous build..."
 make clean > /dev/null 2>&1

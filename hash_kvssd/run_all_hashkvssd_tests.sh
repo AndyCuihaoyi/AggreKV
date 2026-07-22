@@ -39,10 +39,10 @@ cd "$SCRIPT_DIR"
 # ============================================================================
 # 默认参数（生产模式）
 # ============================================================================
-NR_G=1048576  # 1GB items
+NR_G=1048575  # 1GB items
 
-# Pool 配置（GB, map_frac）；本次全量使用 32/64/128 GB（用户指定）
-POOLS_G=(32 64 128)
+# Pool 配置（GB, map_frac）；本次全量使用 64/128/256 GB（用户指定）
+POOLS_G=(64 128 256)
 POOL_FRACS=(0.2500 0.5000 1.0000)
 
 # Keylen 敏感度
@@ -56,8 +56,6 @@ YCSB_OPS_PERF=12500000           # 原 100,000,000 → 1/8
 # E6/E7 full YCSB-A-F sweep (separate from E1-E5 Pools).
 #   E6: 128 GB pool, map_frac 0.5  (half of pool is mapping table → ~150 GiB live)
 #   E7: 256 GB pool, map_frac 1.0  (full pool mapped; needs >= ~280 GiB RAM)
-# YCSB_OPS uses 4M ops/workload so each of the 6 workloads (a-f) finishes
-# in a few minutes (well under an hour on the 128-core test box).
 E6_POOL_GB=128
 E6_MAP_FRAC=0.5000
 E7_POOL_GB=256

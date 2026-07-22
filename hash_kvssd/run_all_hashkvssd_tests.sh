@@ -53,6 +53,17 @@ YCSB_OPS=250000                  # 原 2,000,000  → 1/8
 YCSB_OPS_KEYLEN=10000000         # 原 80,000,000 → 1/8
 YCSB_OPS_PERF=12500000           # 原 100,000,000 → 1/8
 
+# E6/E7 full YCSB-A-F sweep (separate from E1-E5 Pools).
+#   E6: 128 GB pool, map_frac 0.5  (half of pool is mapping table → ~150 GiB live)
+#   E7: 256 GB pool, map_frac 1.0  (full pool mapped; needs >= ~280 GiB RAM)
+# YCSB_OPS uses 4M ops/workload so each of the 6 workloads (a-f) finishes
+# in a few minutes (well under an hour on the 128-core test box).
+E6_POOL_GB=128
+E6_MAP_FRAC=0.5000
+E7_POOL_GB=256
+E7_MAP_FRAC=1.0000
+E6_E7_YCSB_OPS=4000000
+
 # Update / Read 操作数（原 16M/64M/10M 缩放到 1/8；文件名/tag 不变）
 UPDATE_NUM_POOL=$((2 * NR_G))    # 原 16M → 2,097,152 (≈2M)
 UPDATE_NUM_KEYLEN=$((8 * NR_G))  # 原 64M → 8,388,608  (≈8M)
@@ -365,10 +376,10 @@ exp5_update_keylen() {
 # ============================================================================
 exp6_ycsb_full() {
     local exp_id="$1"; local pool_gb="$2"; local profile_cflags="$3"
-    local ycsb_tag="$4"
+    local ycsb_tag="$4"; local map_frac="$5"
     echo ""
     echo "######################################################################"
-    echo "# E${exp_id}: YCSB A-F @ pool=${pool_gb}GB"
+    echo "# E${exp_id}: YCSB A-F @ pool=${pool_gb}GB, map_frac=${map_frac}, ops=${E6_E7_YCSB_OPS}"
     echo "######################################################################"
     build_aggrekv "${profile_cflags}" || return 1
     local pool=$((pool_gb * NR_G))
@@ -377,7 +388,8 @@ exp6_ycsb_full() {
             "E${exp_id}_ycsb_${w}_pool${pool_gb}G_${ycsb_tag}" \
             --pool_size "${pool}" \
             --ycsb "${w}" \
-            --ycsb_ops "${YCSB_OPS}" \
+            --ycsb_ops "${E6_E7_YCSB_OPS}" \
+            --map_size_frac "${map_frac}" \
             --keylen_mean 32 \
             --variable_keylen
     done
@@ -679,8 +691,8 @@ should_run "E2" && exp2_update_throughput || echo "[skip E2]"
 should_run "E3" && exp3_tail_latency || echo "[skip E3]"
 should_run "E4" && exp4_ycsb_keylen || echo "[skip E4]"
 should_run "E5" && exp5_update_keylen || echo "[skip E5]"
-should_run "E6" && exp6_ycsb_full 6 1 "${PROFILE_E6_CFLAGS}" smoke || echo "[skip E6]"
-should_run "E7" && exp6_ycsb_full 7 1 "${PROFILE_E7_CFLAGS}" smoke || echo "[skip E7]"
+should_run "E6" && exp6_ycsb_full 6 "${E6_POOL_GB}" "${PROFILE_E6_CFLAGS}" "E6" "${E6_MAP_FRAC}" || echo "[skip E6]"
+should_run "E7" && exp6_ycsb_full 7 "${E7_POOL_GB}" "${PROFILE_E7_CFLAGS}" "E7" "${E7_MAP_FRAC}" || echo "[skip E7]"
 should_run "E8" && exp8_gc_wear || echo "[skip E8]"
 should_run "E9" && exp9_perf_profile || echo "[skip E9]"
 

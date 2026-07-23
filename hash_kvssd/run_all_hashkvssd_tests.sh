@@ -3,32 +3,32 @@
 #  Hash-KVSSD (AggreKV) All-in-One Test Suite
 # ============================================================================
 #
-#  串行运行以下 8 大实验，并按 [EXP_TAG] / [SUMMARY] / [END_STATS] 等标记
-#  行从日志中解析关键指标，写入汇总表：
+#  Hash-KVSSD (AggreKV) — All-in-One Test Suite
 #
-#    E1: Read 吞吐    (3 pool × {uniform, zipfian})
-#    E2: Update 吞吐  (3 pool × {uniform, zipfian})
-#    E3: Tail 延迟    (3 pool × zipfian, iodepth=1, p95/99/99.9/99.99)
-#    E4: YCSB A keylen 敏感度 (16B / 32B / 64B)
-#    E5: Update keylen 敏感度 (16B / 32B / 64B)
-#    E6: YCSB A-F @ 128GB
-#    E7: YCSB A-F @ 256GB
-#    E8: GC wear       (10GB pool, zipfian update, ssd_lat_off)
-#    E9: Perf profile  (YCSB A, 需手动 perf attach; 由 SKIP_PERF=1 跳过)
+#  Runs nine experiments (E1..E9) and parses [EXP_TAG] / [SUMMARY] /
+#  [END_STATS] markers from each log into a per-experiment row in
+#  hash_kvssd_results/summary/.
 #
-#  每个实验块开头都强制 clean+make（PROFILE_X_CFLAGS），宏变化时二进制必然更新。
+#    E1: Read throughput   (3 pool × {uniform, zipfian})
+#    E2: Update throughput (3 pool × {uniform, zipfian})
+#    E3: Tail latency      (3 pool × zipfian, iodepth=1, p95/99/99.9/99.99)
+#    E4: YCSB A — key-length sensitivity (16B / 32B / 64B)
+#    E5: Update — key-length sensitivity (16B / 32B / 64B)
+#    E6: YCSB A-F @ 128 GB pool, map_frac 0.5
+#    E7: YCSB A-F @ 256 GB pool, map_frac 1.0
+#    E8: GC wear           (10 GB pool, zipfian update, ssd_lat_off)
+#    E9: Perf profile      (YCSB A, manual perf attach; skipped by default)
 #
-#  用法：
-#    bash run_all_hashkvssd_tests.sh              # 默认数据量（生产）
-#    bash run_all_hashkvssd_tests.sh --smoke      # 小数据量冒烟（验证脚本）
-#    bash run_all_hashkvssd_tests.sh --only E1    # 仅跑 E1
-#    NUMA_NODE=1 bash run_all_hashkvssd_tests.sh  # NUMA 绑定
-#    RUN_NOW=1 bash run_all_hashkvssd_tests.sh    # 立即执行（默认仅 dry-run 校验）
+#  Usage:
+#    bash run_all_hashkvssd_tests.sh              # full sweep
+#    bash run_all_hashkvssd_tests.sh --smoke      # small-data smoke test
+#    bash run_all_hashkvssd_tests.sh --only E1    # run a single experiment
+#    NUMA_NODE=1 bash run_all_hashkvssd_tests.sh  # bind to NUMA node 1
 #
-#  全部结果落在  all_test_results_<timestamp>/  下：
-#      logs/                 每实验一个 .log（按 [EXP_TAG] 分组）
-#      summary/summary.txt   汇总表（人读）
-#      summary/summary.csv   汇总表（CSV，可导入 pandas）
+#  All results land in hash_kvssd_results/:
+#      logs/                  one .log per experiment, named by [EXP_TAG]
+#      summary/summary.txt    human-readable aggregate
+#      summary/summary.csv    CSV aggregate (pandas-friendly)
 # ============================================================================
 set -euo pipefail
 
@@ -36,47 +36,41 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # ============================================================================
-# 默认参数（生产模式）
+# Production defaults (non-smoke)
 # ============================================================================
 NR_G=1048575  # 1GB items
 
-# Pool 配置（GB, map_frac）；本次全量使用 64/128/256 GB（用户指定）
+# Pools (GB) paired with POOL_FRACS at the same index.
 POOLS_G=(64 128 256)
 POOL_FRACS=(0.2500 0.5000 1.0000)
 
-# Keylen 敏感度
+# Key-length sensitivity values
 KEYLENS=(16 32 64)
 
-# YCSB 操作数（生产；原 2M/80M/100M 缩放到 1/8，加速测试；文件名/tag 不变）
-YCSB_OPS=250000                  # 原 2,000,000  → 1/8
-YCSB_OPS_KEYLEN=10000000         # 原 80,000,000 → 1/8
-YCSB_OPS_PERF=12500000           # 原 100,000,000 → 1/8
+# YCSB ops per workload (see exp* functions for usage)
+YCSB_OPS=250000                  # (production scale)
+YCSB_OPS_KEYLEN=10000000         # (production scale)
+YCSB_OPS_PERF=12500000           # (production scale)
 
-# E6/E7 full YCSB-A-F sweep (separate from E1-E5 Pools).
-#   E6: 128 GB pool, map_frac 0.5  (half of pool is mapping table → ~150 GiB live)
-#   E7: 256 GB pool, map_frac 1.0  (full pool mapped; needs >= ~280 GiB RAM)
+# E6/E7 full YCSB-A-F sweep (separate from E1-E5 pools).
 E6_POOL_GB=128
 E6_MAP_FRAC=0.5000
 E7_POOL_GB=256
 E7_MAP_FRAC=1.0000
 E6_E7_YCSB_OPS=4000000
-# YCSB 'e' (range scans) on full-size pools emits very large read sets that
-# overflow the binary's tracking range and produce N/A in the summary.
-# For E6/E7 only, run YCSB 'e' at 1/100 ops so it stays in range. The log
-# filename keeps the original tag (E6 / E7) so downstream parsing is unchanged.
 E6_E7_YCSB_OPS_E=$((E6_E7_YCSB_OPS / 100))
 
-# Update / Read 操作数（原 16M/64M/10M 缩放到 1/8；文件名/tag 不变）
-UPDATE_NUM_POOL=$((2 * NR_G))    # 原 16M → 2,097,152 (≈2M)
-UPDATE_NUM_KEYLEN=$((8 * NR_G))  # 原 64M → 8,388,608  (≈8M)
-UPDATE_NUM_GC=$((1310720))       # 原 10M → 1,310,720  (≈1.25M)
-READ_NUM_FACTOR=1                 # read_num = pool_size * factor / NUM_WORKERS（系数，与缩放无关）
+# Update / Read op counts (see exp* functions for usage)
+UPDATE_NUM_POOL=$((2 * NR_G))    # (= 2 * NR_G)
+UPDATE_NUM_KEYLEN=$((8 * NR_G))  # (= 8 * NR_G)
+UPDATE_NUM_GC=$((1310720))       # (fixed value)
+READ_NUM_FACTOR=1                 # read_num = pool_size * factor / NUM_WORKERS
 
-# GC wear pool
+# GC wear pool size
 GC_WEAR_POOL_GB=10
 GC_WEAR_POOL=$((GC_WEAR_POOL_GB * NR_G))
 
-# 编译宏（每个实验一个 profile）
+# Per-experiment compile profiles
 COMMON_CFLAGS_BASE="-g -Wall -fcommon -lm -lglib-2.0"
 PROFILE_E1_CFLAGS="${COMMON_CFLAGS_BASE} -DHOT_CMT -DADAPTIVE_MEM"
 PROFILE_E2_CFLAGS="${COMMON_CFLAGS_BASE} -DHOT_CMT -DADAPTIVE_MEM"
@@ -89,7 +83,7 @@ PROFILE_E8_CFLAGS="${COMMON_CFLAGS_BASE} -DHOT_CMT -DDATA_SEGREGATION -DADAPTIVE
 PROFILE_E9_CFLAGS="${COMMON_CFLAGS_BASE} -DHOT_CMT -DDATA_SEGREGATION -DADAPTIVE_MEM"
 
 # ============================================================================
-# 冒烟测试参数（SMOKE_MODE）
+# Smoke-mode defaults
 # ============================================================================
 SMOKE_MODE=0
 SMOKE_POOL_SIZE=$((64 * NR_G / 1024))   # 64MB items (≈ pool_size = 64K)
@@ -99,10 +93,10 @@ SMOKE_UPDATE_NUM=5000
 SMOKE_READ_NUM=5000
 SMOKE_KEYLEN=16
 SMOKE_GC_POOL_GB=1
-SMOKE_GC_POOL=$((SMOKE_GC_POOL_GB * NR_G / 1024 * 1024))  # 占位
+SMOKE_GC_POOL=$((SMOKE_GC_POOL_GB * NR_G / 1024 * 1024))  # placeholder
 
 # ============================================================================
-# CLI 解析
+# CLI parsing
 # ============================================================================
 ONLY_EXPS=()
 while [[ $# -gt 0 ]]; do
@@ -131,29 +125,29 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# 冒烟模式：把所有数据量压到最小
+# Smoke-mode override (compact everything)
 if [[ "${SMOKE_MODE}" == "1" ]]; then
-    echo "[SMOKE MODE] 启用冒烟测试（小数据量）"
-    POOLS_G=(1)               # 1GB → 实测极小值
+    echo "[SMOKE MODE] enabled (compact data sizes)"
+    POOLS_G=(1)               # 1 GB, smallest meaningful pool
     POOL_FRACS=(0.2500)
     KEYLENS=(16 32)
     YCSB_OPS=${SMOKE_YCSB_OPS}                # 5000
-    YCSB_OPS_KEYLEN=${SMOKE_YCSB_OPS}         # 冒烟下也压到 5000
+    YCSB_OPS_KEYLEN=${SMOKE_YCSB_OPS}         # (= SMOKE_YCSB_OPS / SMOKE_UPDATE_NUM)
     YCSB_OPS_PERF=${SMOKE_YCSB_OPS}
     UPDATE_NUM_POOL=${SMOKE_UPDATE_NUM}        # 5000
-    UPDATE_NUM_KEYLEN=${SMOKE_UPDATE_NUM}      # 冒烟下也压到 5000
+    UPDATE_NUM_KEYLEN=${SMOKE_UPDATE_NUM}      # (= SMOKE_YCSB_OPS / SMOKE_UPDATE_NUM)
     UPDATE_NUM_GC=${SMOKE_UPDATE_NUM}
     GC_WEAR_POOL_GB=1
     GC_WEAR_POOL=$((1 * NR_G / 1024))         # 1MB items
 fi
 
 # ============================================================================
-# 路径与目录（固定 hash_kvssd_results/，不带日期后缀）
+# Paths and directories
 # ============================================================================
 RESULTS_DIR="hash_kvssd_results"
 LOG_DIR="${RESULTS_DIR}/logs"
 SUMMARY_DIR="${RESULTS_DIR}/summary"
-# 启动时清空旧结果，保持干净
+# Clear previous results
 rm -rf "${RESULTS_DIR}"
 mkdir -p "${LOG_DIR}" "${SUMMARY_DIR}"
 
@@ -165,12 +159,11 @@ NUMACTL_CMD="numactl"
 NUMACTL_ARGS="--cpunodebind=${NUMA_NODE} --membind=${NUMA_NODE}"
 
 # ============================================================================
-# 通用函数
+# Common helpers
 # ============================================================================
 
 # build_aggrekv <profile_cflags>
-#   直接调用 gcc 编译，避免命令行 CFLAGS 覆盖 module.mk 中目标专属的 += 规则。
-#   必须在 clean 后从源码逐个 .c 编 .o，再链接。
+#   Clean and rebuild the binary with the given CFLAGS profile.
 build_aggrekv() {
     local extra="$1"
     echo ""
@@ -199,7 +192,7 @@ build_aggrekv() {
         return 1
     fi
 
-    # 链接
+    # Link step
     if ! cc ${OBJ_FILES} ${COMMON} -lm -lglib-2.0 -o "${BIN}" 2>&1; then
         echo "[ERROR] link failed"
         return 1
@@ -213,7 +206,7 @@ build_aggrekv() {
 }
 
 # run_one <exp_id> <exp_tag> <log_name> <binary_args...>
-#   包装 numactl + log 重定向；失败不终止（继续后续实验）
+#   Wraps numactl + log redirection; failures do not abort the run.
 run_one() {
     local exp_id="$1"; shift
     local exp_tag="$1"; shift
@@ -229,7 +222,7 @@ run_one() {
     }
 }
 
-# ----- 过滤函数：仅当 --only 指定时才运行 -----
+# ----- Filter helper: only run if --only requested -----
 should_run() {
     local eid="$1"
     if [[ ${#ONLY_EXPS[@]} -eq 0 ]]; then return 0; fi
@@ -240,7 +233,7 @@ should_run() {
 }
 
 # ============================================================================
-# 实验 1: Read 吞吐 (3 pool × 2 dist)
+# Experiment 1: Read throughput (3 pool × 2 dist)
 # ============================================================================
 exp1_read_throughput() {
     echo ""
@@ -268,7 +261,7 @@ exp1_read_throughput() {
 }
 
 # ============================================================================
-# 实验 2: Update 吞吐 (3 pool × 2 dist)
+# Experiment 2: Update throughput (3 pool × 2 dist)
 # ============================================================================
 exp2_update_throughput() {
     echo ""
@@ -295,7 +288,7 @@ exp2_update_throughput() {
 }
 
 # ============================================================================
-# 实验 3: Tail 延迟 (3 pool, zipfian, iodepth=1)
+# Experiment 3: Tail latency (3 pool, zipfian, iodepth=1)
 # ============================================================================
 exp3_tail_latency() {
     echo ""
@@ -321,7 +314,7 @@ exp3_tail_latency() {
 }
 
 # ============================================================================
-# 实验 4: YCSB A keylen 敏感度
+# Experiment 4: YCSB A — key-length sensitivity
 # ============================================================================
 exp4_ycsb_keylen() {
     echo ""
@@ -329,7 +322,7 @@ exp4_ycsb_keylen() {
     echo "# E4: YCSB A — Key-Length Sensitivity (${KEYLENS[*]} B)"
     echo "######################################################################"
     build_aggrekv "${PROFILE_E4_CFLAGS}" || return 1
-    # pool: 冒烟用 1GB（≈1M），生产用 64GB；map_frac=0.25
+    # pool: smoke = 1 GB, production = 64 GB; map_frac=0.25
     local pool_gb=64
     if [[ "${SMOKE_MODE}" == "1" ]]; then pool_gb=1; fi
     local pool=$((pool_gb * NR_G))
@@ -347,7 +340,7 @@ exp4_ycsb_keylen() {
 }
 
 # ============================================================================
-# 实验 5: Update keylen 敏感度
+# Experiment 5: Update — key-length sensitivity
 # ============================================================================
 exp5_update_keylen() {
     echo ""
@@ -374,7 +367,7 @@ exp5_update_keylen() {
 }
 
 # ============================================================================
-# 实验 6/7: YCSB A-F
+# Experiment 6/7: YCSB A-F full sweep
 # ============================================================================
 exp6_ycsb_full() {
     local exp_id="$1"; local pool_gb="$2"; local profile_cflags="$3"
@@ -404,7 +397,7 @@ exp6_ycsb_full() {
 }
 
 # ============================================================================
-# 实验 8: GC wear (10GB pool, zipfian update)
+# Experiment 8: GC wear (10 GB pool, zipfian update)
 # ============================================================================
 exp8_gc_wear() {
     echo ""
@@ -423,16 +416,16 @@ exp8_gc_wear() {
 }
 
 # ============================================================================
-# 实验 9: Perf profile (手动 attach)
+# Experiment 9: Perf profile (manual attach)
 # ============================================================================
 exp9_perf_profile() {
     if [[ "${SKIP_PERF:-0}" == "1" ]]; then
-        echo "[E9] SKIP_PERF=1, 跳过 perf profile"
+        echo "[E9] SKIP_PERF=1, skipping perf profile"
         return 0
     fi
     echo ""
     echo "######################################################################"
-    echo "# E9: Perf Profile (YCSB A, 手动 perf attach)"
+    echo "# E9: Perf Profile (YCSB A, manual perf attach)"
     echo "######################################################################"
     build_aggrekv "${PROFILE_E9_CFLAGS}" || return 1
     local pool=$((64 * NR_G))
@@ -458,7 +451,7 @@ exp9_perf_profile() {
 }
 
 # ============================================================================
-# 汇总：解析日志 → summary.txt + summary.csv
+# Summary: parse logs into summary.txt + summary.csv
 # ============================================================================
 summarize_all() {
     local txt="${SUMMARY_DIR}/summary.txt"
@@ -562,7 +555,7 @@ EOF
         [[ ! -f "$f" ]] && continue
         local tag=$(basename "$f" .log)
         local kl=$(echo "${tag}" | grep -oP 'keylen\K[0-9]+')
-        # update_bench 的 SUMMARY 行格式：
+        # update_bench SUMMARY line format:
         #   [SUMMARY] pool_size=..., update_dist=..., update_num=N, iodepth=..., update_iops=X.XX, hit_rt=Y.YYYY%
         local upd_num=$(grep -oP 'update_num=\K[0-9]+' "$f" | head -1)
         local upd_iops=$(grep -oP 'update_iops=\K[\d.]+' "$f" | head -1)
@@ -634,9 +627,6 @@ EOF
     cat "${csv}"
 }
 
-# ============================================================================
-# 配置落盘
-# ============================================================================
 # ============================================================================
 # Main
 # ============================================================================

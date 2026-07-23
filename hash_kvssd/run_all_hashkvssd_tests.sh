@@ -20,10 +20,22 @@
 #    E9: Perf profile      (YCSB A, manual perf attach; skipped by default)
 #
 #  Usage:
-#    bash run_all_hashkvssd_tests.sh              # full sweep
-#    bash run_all_hashkvssd_tests.sh --smoke      # small-data smoke test
-#    bash run_all_hashkvssd_tests.sh --only E1    # run a single experiment
-#    NUMA_NODE=1 bash run_all_hashkvssd_tests.sh  # bind to NUMA node 1
+#    bash run_all_hashkvssd_tests.sh                  # full sweep (all variants)
+#    bash run_all_hashkvssd_tests.sh aggrekv          # AggreKV variant only
+#    bash run_all_hashkvssd_tests.sh rhik             # RHIK variant only
+#    bash run_all_hashkvssd_tests.sh --smoke          # small-data smoke test
+#    bash run_all_hashkvssd_tests.sh --only E1        # run a single experiment
+#    bash run_all_hashkvssd_tests.sh rhik --only E6   # combine variant + filter
+#    NUMA_NODE=1 bash run_all_hashkvssd_tests.sh      # bind to NUMA node 1
+#
+#  Variants:
+#    AggreKV — proposed design (HOT_CMT, ADAPTIVE_MEM, DATA_SEGREGATION)
+#    RHIK    — baseline without the three AggreKV optimizations
+#              (HOT_CMT / ADAPTIVE_MEM / DATA_SEGREGATION macros are unset)
+#    all     — run both variants in sequence (default)
+#
+#  Each variant produces its own log files and summary section, distinguished
+#  by the suffix _AggreKV or _RHIK on the log file name.
 #
 #  All results land in hash_kvssd_results/:
 #      logs/                  one .log per experiment, named by [EXP_TAG]
@@ -34,6 +46,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
+
+# Default variant mode; overridable via positional argument below.
+VARIANT_MODE="all"
 
 # ============================================================================
 # Production defaults (non-smoke)
@@ -82,6 +97,19 @@ PROFILE_E7_CFLAGS="${COMMON_CFLAGS_BASE} -DHOT_CMT -DDATA_SEGREGATION -DADAPTIVE
 PROFILE_E8_CFLAGS="${COMMON_CFLAGS_BASE} -DHOT_CMT -DDATA_SEGREGATION -DADAPTIVE_MEM"
 PROFILE_E9_CFLAGS="${COMMON_CFLAGS_BASE} -DHOT_CMT -DDATA_SEGREGATION -DADAPTIVE_MEM"
 
+
+# RHIK baseline variant: same COMMON_CFLAGS_BASE but without the three
+# AggreKV-specific optimization macros (-DHOT_CMT, -DADAPTIVE_MEM, -DDATA_SEGREGATION).
+PROFILE_E1_CFLAGS_RHIK="${COMMON_CFLAGS_BASE}"
+PROFILE_E2_CFLAGS_RHIK="${COMMON_CFLAGS_BASE}"
+PROFILE_E3_CFLAGS_RHIK="${COMMON_CFLAGS_BASE}"
+PROFILE_E4_CFLAGS_RHIK="${COMMON_CFLAGS_BASE}"
+PROFILE_E5_CFLAGS_RHIK="${COMMON_CFLAGS_BASE}"
+PROFILE_E6_CFLAGS_RHIK="${COMMON_CFLAGS_BASE}"
+PROFILE_E7_CFLAGS_RHIK="${COMMON_CFLAGS_BASE}"
+PROFILE_E8_CFLAGS_RHIK="${COMMON_CFLAGS_BASE}"
+PROFILE_E9_CFLAGS_RHIK="${COMMON_CFLAGS_BASE}"
+
 # ============================================================================
 # Smoke-mode defaults
 # ============================================================================
@@ -119,11 +147,19 @@ while [[ $# -gt 0 ]]; do
             grep -E '^#  ' "$0" | head -40
             exit 0
             ;;
+        aggrekv|rhik|all)
+            VARIANT_MODE="$1"
+            shift
+            ;;
         *)
             echo "Unknown option: $1"; exit 1
             ;;
     esac
 done
+
+if [[ "${VARIANT_MODE}" != "aggrekv" && "${VARIANT_MODE}" != "rhik" && "${VARIANT_MODE}" != "all" ]]; then
+    echo "Invalid variant mode: ${VARIANT_MODE} (expected: aggrekv|rhik|all)"; exit 1
+fi
 
 # Smoke-mode override (compact everything)
 if [[ "${SMOKE_MODE}" == "1" ]]; then
@@ -222,6 +258,46 @@ run_one() {
     }
 }
 
+# ----- Variant selectors -----
+# pick_variant_cflags <eid>
+#   Return the CFLAGS profile for the current variant (AggreKV or RHIK).
+pick_variant_cflags() {
+    local eid="$1"
+    if [[ "${VARIANT_MODE_FLAG:-AggreKV}" == "RHIK" ]]; then
+        eval "echo "\${PROFILE_${eid}_CFLAGS_RHIK}""
+    else
+        eval "echo "\${PROFILE_${eid}_CFLAGS}""
+    fi
+}
+
+# pick_variant_frac <pool_idx>
+#   Return map_size_frac for the current variant. AggreKV uses POOL_FRACS;
+#   RHIK always uses 1.0.
+pick_variant_frac() {
+    local idx="$1"
+    if [[ "${VARIANT_MODE_FLAG:-AggreKV}" == "RHIK" ]]; then
+        echo "1.0000"
+    else
+        echo "${POOL_FRACS[$idx]}"
+    fi
+}
+
+# pick_variant_frac_fixed <aggrekv_frac>
+pick_variant_frac_fixed() {
+    local aggrekv_frac="$1"
+    if [[ "${VARIANT_MODE_FLAG:-AggreKV}" == "RHIK" ]]; then
+        echo "1.0000"
+    else
+        echo "${aggrekv_frac}"
+    fi
+}
+
+# pick_variant_suffix
+#   Return the log-file suffix for the current variant.
+pick_variant_suffix() {
+    echo "${VARIANT_MODE_FLAG:-AggreKV}"   # "AggreKV" or "RHIK"
+}
+
 # ----- Filter helper: only run if --only requested -----
 should_run() {
     local eid="$1"
@@ -238,17 +314,20 @@ should_run() {
 exp1_read_throughput() {
     echo ""
     echo "######################################################################"
-    echo "# E1: Read Throughput (3 pool × {uniform, zipfian})"
+    echo "# E1: Read Throughput (3 pool × {uniform, zipfian})  [${VARIANT_MODE_FLAG}]"
     echo "######################################################################"
-    build_aggrekv "${PROFILE_E1_CFLAGS}" || return 1
+    build_aggrekv "$(pick_variant_cflags E1)" || return 1
     local idx=0
+    local suffix
+    suffix="$(pick_variant_suffix)"
     for pg in "${POOLS_G[@]}"; do
-        local frac="${POOL_FRACS[$idx]}"
+        local frac
+        frac="$(pick_variant_frac $idx)"
         local pool=$((pg * NR_G))
         local num_read=$((pool * READ_NUM_FACTOR / 7))
         for dist in uniform zipfian; do
             run_one "1" "read_pool${pg}G_${dist}" \
-                "E1_read_pool${pg}G_${dist}" \
+                "E1_read_pool${pg}G_${dist}_${suffix}" \
                 --pool_size "${pool}" \
                 --map_size_frac "${frac}" \
                 --num_read "${num_read}" \
@@ -266,16 +345,19 @@ exp1_read_throughput() {
 exp2_update_throughput() {
     echo ""
     echo "######################################################################"
-    echo "# E2: Update Throughput (3 pool × {uniform, zipfian})"
+    echo "# E2: Update Throughput (3 pool × {uniform, zipfian})  [${VARIANT_MODE_FLAG}]"
     echo "######################################################################"
-    build_aggrekv "${PROFILE_E2_CFLAGS}" || return 1
+    build_aggrekv "$(pick_variant_cflags E2)" || return 1
     local idx=0
+    local suffix
+    suffix="$(pick_variant_suffix)"
     for pg in "${POOLS_G[@]}"; do
-        local frac="${POOL_FRACS[$idx]}"
+        local frac
+        frac="$(pick_variant_frac $idx)"
         local pool=$((pg * NR_G))
         for dist in uniform zipfian; do
             run_one "2" "update_pool${pg}G_${dist}" \
-                "E2_update_pool${pg}G_${dist}" \
+                "E2_update_pool${pg}G_${dist}_${suffix}" \
                 --pool_size "${pool}" \
                 --map_size_frac "${frac}" \
                 --num_update "${UPDATE_NUM_POOL}" \
@@ -293,16 +375,19 @@ exp2_update_throughput() {
 exp3_tail_latency() {
     echo ""
     echo "######################################################################"
-    echo "# E3: Tail Latency (3 pool, zipfian, iodepth=1)"
+    echo "# E3: Tail Latency (3 pool, zipfian, iodepth=1)  [${VARIANT_MODE_FLAG}]"
     echo "######################################################################"
-    build_aggrekv "${PROFILE_E3_CFLAGS}" || return 1
+    build_aggrekv "$(pick_variant_cflags E3)" || return 1
     local idx=0
+    local suffix
+    suffix="$(pick_variant_suffix)"
     for pg in "${POOLS_G[@]}"; do
-        local frac="${POOL_FRACS[$idx]}"
+        local frac
+        frac="$(pick_variant_frac $idx)"
         local pool=$((pg * NR_G))
         local num_read=$((pool * READ_NUM_FACTOR / 7))
         run_one "3" "tail_pool${pg}G_zipf" \
-            "E3_tail_pool${pg}G_zipf" \
+            "E3_tail_pool${pg}G_zipf_${suffix}" \
             --pool_size "${pool}" \
             --map_size_frac "${frac}" \
             --num_read "${num_read}" \
@@ -319,17 +404,19 @@ exp3_tail_latency() {
 exp4_ycsb_keylen() {
     echo ""
     echo "######################################################################"
-    echo "# E4: YCSB A — Key-Length Sensitivity (${KEYLENS[*]} B)"
+    echo "# E4: YCSB A — Key-Length Sensitivity (${KEYLENS[*]} B)  [${VARIANT_MODE_FLAG}]"
     echo "######################################################################"
-    build_aggrekv "${PROFILE_E4_CFLAGS}" || return 1
-    # pool: smoke = 1 GB, production = 64 GB; map_frac=0.25
+    build_aggrekv "$(pick_variant_cflags E4)" || return 1
     local pool_gb=64
     if [[ "${SMOKE_MODE}" == "1" ]]; then pool_gb=1; fi
     local pool=$((pool_gb * NR_G))
-    local frac=0.2500
+    local frac
+    frac="$(pick_variant_frac_fixed 0.2500)"
+    local suffix
+    suffix="$(pick_variant_suffix)"
     for kl in "${KEYLENS[@]}"; do
         run_one "4" "ycsb_a_keylen${kl}" \
-            "E4_ycsb_a_keylen${kl}" \
+            "E4_ycsb_a_keylen${kl}_${suffix}" \
             --pool_size "${pool}" \
             --map_size_frac "${frac}" \
             --ycsb a \
@@ -345,16 +432,19 @@ exp4_ycsb_keylen() {
 exp5_update_keylen() {
     echo ""
     echo "######################################################################"
-    echo "# E5: Update — Key-Length Sensitivity (${KEYLENS[*]} B)"
+    echo "# E5: Update — Key-Length Sensitivity (${KEYLENS[*]} B)  [${VARIANT_MODE_FLAG}]"
     echo "######################################################################"
-    build_aggrekv "${PROFILE_E5_CFLAGS}" || return 1
+    build_aggrekv "$(pick_variant_cflags E5)" || return 1
     local pool_gb=64
     if [[ "${SMOKE_MODE}" == "1" ]]; then pool_gb=1; fi
     local pool=$((pool_gb * NR_G))
-    local frac=0.2500
+    local frac
+    frac="$(pick_variant_frac_fixed 0.2500)"
+    local suffix
+    suffix="$(pick_variant_suffix)"
     for kl in "${KEYLENS[@]}"; do
         run_one "5" "update_keylen${kl}" \
-            "E5_update_keylen${kl}" \
+            "E5_update_keylen${kl}_${suffix}" \
             --pool_size "${pool}" \
             --map_size_frac "${frac}" \
             --num_update "${UPDATE_NUM_KEYLEN}" \
@@ -374,10 +464,12 @@ exp6_ycsb_full() {
     local ycsb_tag="$4"; local map_frac="$5"
     echo ""
     echo "######################################################################"
-    echo "# E${exp_id}: YCSB A-F @ pool=${pool_gb}GB, map_frac=${map_frac}, ops=${E6_E7_YCSB_OPS}"
+    echo "# E${exp_id}: YCSB A-F @ pool=${pool_gb}GB, map_frac=${map_frac}, ops=${E6_E7_YCSB_OPS}  [${VARIANT_MODE_FLAG}]"
     echo "######################################################################"
     build_aggrekv "${profile_cflags}" || return 1
     local pool=$((pool_gb * NR_G))
+    local suffix
+    suffix="$(pick_variant_suffix)"
     for w in a b c d e f; do
         # YCSB 'e' uses a smaller op count (see E6_E7_YCSB_OPS_E) to keep
         # its range-scan footprint within the binary's tracking range.
@@ -386,7 +478,7 @@ exp6_ycsb_full() {
             w_ops="${E6_E7_YCSB_OPS_E}"
         fi
         run_one "${exp_id}" "ycsb_${w}_pool${pool_gb}G_${ycsb_tag}" \
-            "E${exp_id}_ycsb_${w}_pool${pool_gb}G_${ycsb_tag}" \
+            "E${exp_id}_ycsb_${w}_pool${pool_gb}G_${ycsb_tag}_${suffix}" \
             --pool_size "${pool}" \
             --ycsb "${w}" \
             --ycsb_ops "${w_ops}" \
@@ -402,10 +494,12 @@ exp6_ycsb_full() {
 exp8_gc_wear() {
     echo ""
     echo "######################################################################"
-    echo "# E8: GC Wear (pool=${GC_WEAR_POOL_GB}GB, zipfian update)"
+    echo "# E8: GC Wear (pool=${GC_WEAR_POOL_GB}GB, zipfian update)  [${VARIANT_MODE_FLAG}]"
     echo "######################################################################"
-    build_aggrekv "${PROFILE_E8_CFLAGS}" || return 1
-    run_one "8" "gc_wear" "E8_gc_wear" \
+    build_aggrekv "$(pick_variant_cflags E8)" || return 1
+    local suffix
+    suffix="$(pick_variant_suffix)"
+    run_one "8" "gc_wear" "E8_gc_wear_${suffix}" \
         --pool_size "${GC_WEAR_POOL}" \
         --map_size_frac 1.0000 \
         --num_update "${UPDATE_NUM_GC}" \
@@ -425,15 +519,19 @@ exp9_perf_profile() {
     fi
     echo ""
     echo "######################################################################"
-    echo "# E9: Perf Profile (YCSB A, manual perf attach)"
+    echo "# E9: Perf Profile (YCSB A, manual perf attach)  [${VARIANT_MODE_FLAG}]"
     echo "######################################################################"
-    build_aggrekv "${PROFILE_E9_CFLAGS}" || return 1
+    build_aggrekv "$(pick_variant_cflags E9)" || return 1
     local pool=$((64 * NR_G))
-    local log_file="${LOG_DIR}/E9_perf_ycsb_a.log"
+    local suffix
+    suffix="$(pick_variant_suffix)"
+    local frac
+    frac="$(pick_variant_frac_fixed 0.2500)"
+    local log_file="${LOG_DIR}/E9_perf_ycsb_a_${suffix}.log"
     local perf_data="${LOG_DIR}/perf.data"
     "${BIN}" --experiment_tag "perf_ycsb_a" \
         --pool_size "${pool}" \
-        --map_size_frac 0.2500 \
+        --map_size_frac "${frac}" \
         --ycsb a \
         --ycsb_ops "${YCSB_OPS_PERF}" \
         > "${log_file}" 2>&1 &
@@ -466,50 +564,60 @@ summarize_all() {
 Run started:  $(date '+%Y-%m-%d %H:%M:%S %Z')
 NUMA node:    ${NUMA_NODE}
 SMOKE mode:   ${SMOKE_MODE}
+Variant:      ${VARIANT_MODE}  (aggrekv | rhik | all)
 Results dir:  ${RESULTS_DIR}
 ========================================================================
 EOF
 
     cat > "${csv}" <<EOF
-exp,tag,total_ops,avg_iops,avg_lat_us,max_lat_us,hit_rate_pct,p95_us,p99_us,p99_9_us,p99_99_us,status
+exp,tag,variant,total_ops,avg_iops,avg_lat_us,max_lat_us,hit_rate_pct,p95_us,p99_us,p99_9_us,p99_99_us,status
 EOF
 
     # ----- E1: read bench (read_iops= / hit_rt=) -----
     cat >> "${txt}" <<EOF
 
 [E1] Read Throughput
-  Tag                              AvgIOPS   HitRate(%)
+  Tag                              Variant    AvgIOPS   HitRate(%)
 EOF
-    for f in "${LOG_DIR}"/E1_read_*.log; do
+    for f in "${LOG_DIR}"/E1_read_*_AggreKV.log "${LOG_DIR}"/E1_read_*_RHIK.log; do
+        [[ ! -f "$f" ]] && continue
+        local variant="AggreKV"
+        if [[ "$f" == *_RHIK.log ]]; then variant="RHIK"; fi
         [[ ! -f "$f" ]] && continue
         local tag=$(basename "$f" .log)
         local iops=$(grep -oP 'read_iops=\K[\d.]+' "$f" | head -1)
         local hit=$(grep -oP 'hit_rt=\K[\d.]+' "$f" | head -1)
-        printf "  %-32s  %-9s  %s\n" "${tag}" "${iops:-N/A}" "${hit:-N/A}" >> "${txt}"
-        echo "E1,${tag},N/A,${iops:-N/A},N/A,N/A,${hit:-N/A},N/A,N/A,N/A,N/A,$(if [[ -n "${iops:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
+        printf "  %-32s  %-9s  %-9s  %s\n" "${tag}" "${variant}" "${iops:-N/A}" "${hit:-N/A}" >> "${txt}"
+        echo "E1,${tag},${variant},N/A,${iops:-N/A},N/A,N/A,${hit:-N/A},N/A,N/A,N/A,N/A,$(if [[ -n "${iops:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
     done
 
     # ----- E2: update bench (update_iops=) -----
     cat >> "${txt}" <<EOF
 
 [E2] Update Throughput
-  Tag                              AvgIOPS
+  Tag                              Variant    AvgIOPS
 EOF
-    for f in "${LOG_DIR}"/E2_update_*.log; do
+    for f in "${LOG_DIR}"/E2_update_*_AggreKV.log "${LOG_DIR}"/E2_update_*_RHIK.log; do
+        [[ ! -f "$f" ]] && continue
+        local variant="AggreKV"
+        if [[ "$f" == *_RHIK.log ]]; then variant="RHIK"; fi
         [[ ! -f "$f" ]] && continue
         local tag=$(basename "$f" .log)
         local iops=$(grep -oP 'update_iops=\K[\d.]+' "$f" | head -1)
-        printf "  %-32s  %s\n" "${tag}" "${iops:-N/A}" >> "${txt}"
-        echo "E2,${tag},N/A,${iops:-N/A},N/A,N/A,N/A,N/A,N/A,N/A,N/A,$(if [[ -n "${iops:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
+        printf "  %-32s  %-9s  %s\n" "${tag}" "${variant}" "${iops:-N/A}" >> "${txt}"
+        echo "E2,${tag},${variant},N/A,${iops:-N/A},N/A,N/A,N/A,N/A,N/A,N/A,N/A,$(if [[ -n "${iops:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
     done
 
     # ----- E3: tail latency (avg_rlat/us: | p95_rlat/us: | ...) -----
     cat >> "${txt}" <<EOF
 
 [E3] Tail Latency (iodepth=1, zipfian)
-  Tag                              Avg(us)   p95(us)   p99(us)   p99.9(us)  p99.99(us)
+  Tag                              Variant    Avg(us)   p95(us)   p99(us)   p99.9(us)  p99.99(us)
 EOF
-    for f in "${LOG_DIR}"/E3_tail_*.log; do
+    for f in "${LOG_DIR}"/E3_tail_*_AggreKV.log "${LOG_DIR}"/E3_tail_*_RHIK.log; do
+        [[ ! -f "$f" ]] && continue
+        local variant="AggreKV"
+        if [[ "$f" == *_RHIK.log ]]; then variant="RHIK"; fi
         [[ ! -f "$f" ]] && continue
         local tag=$(basename "$f" .log)
         local line=$(grep -m1 "avg_rlat/us:" "$f" || true)
@@ -518,11 +626,11 @@ EOF
                 for (i=2; i<=6; i++) gsub(/[^0-9]/, "", $i);
                 printf "%s %s %s %s %s\n", $2, $3, $4, $5, $6;
             }')
-            printf "  %-32s  %s\n" "${tag}" "${vals}" >> "${txt}"
-            echo "E3,${tag},N/A,N/A,$(echo $vals | awk '{print $1}'),N/A,N/A,$(echo $vals | awk '{print $2}'),$(echo $vals | awk '{print $3}'),$(echo $vals | awk '{print $4}'),$(echo $vals | awk '{print $5}'),OK" >> "${csv}"
+            printf "  %-32s  %-9s  %s\n" "${tag}" "${variant}" "${vals}" >> "${txt}"
+            echo "E3,${tag},${variant},N/A,N/A,$(echo $vals | awk '{print $1}'),N/A,N/A,$(echo $vals | awk '{print $2}'),$(echo $vals | awk '{print $3}'),$(echo $vals | awk '{print $4}'),$(echo $vals | awk '{print $5}'),OK" >> "${csv}"
         else
-            printf "  %-32s  N/A (no tail-latency line found)\n" "${tag}" >> "${txt}"
-            echo "E3,${tag},N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,FAIL" >> "${csv}"
+            printf "  %-32s  %-9s  N/A (no tail-latency line found)\n" "${tag}" "${variant}" >> "${txt}"
+            echo "E3,${tag},${variant},N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,FAIL" >> "${csv}"
         fi
     done
 
@@ -530,9 +638,12 @@ EOF
     cat >> "${txt}" <<EOF
 
 [E4] YCSB Key-Length Sensitivity
-  Tag                              KeyLen   TotalOps   AvgIOPS   AvgLat(us)  HitRate(%)
+  Tag                              Variant    KeyLen   TotalOps   AvgIOPS   AvgLat(us)  HitRate(%)
 EOF
-    for f in "${LOG_DIR}"/E4_*.log; do
+    for f in "${LOG_DIR}"/E4_*_AggreKV.log "${LOG_DIR}"/E4_*_RHIK.log; do
+        [[ ! -f "$f" ]] && continue
+        local variant="AggreKV"
+        if [[ "$f" == *_RHIK.log ]]; then variant="RHIK"; fi
         [[ ! -f "$f" ]] && continue
         local tag=$(basename "$f" .log)
         local kl=$(echo "${tag}" | grep -oP 'keylen\K[0-9]+')
@@ -540,18 +651,21 @@ EOF
         local iops=$(grep -oP 'Avg IOPS:\s*\K[\d.]+' "$f" | head -1)
         local lat=$(grep -oP 'Avg latency:\s*\K[\d.]+' "$f" | head -1)
         local hit=$(grep -oP 'Cache Hit:\s*\K[\d.]+' "$f" | head -1)
-        printf "  %-32s  %-7s  %-9s  %-8s  %-10s  %s\n" \
-            "${tag}" "${kl:-N/A}" "${ops:-N/A}" "${iops:-N/A}" "${lat:-N/A}" "${hit:-N/A}" >> "${txt}"
-        echo "E4,${tag},${ops:-N/A},${iops:-N/A},${lat:-N/A},N/A,${hit:-N/A},N/A,N/A,N/A,N/A,$(if [[ -n "${iops:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
+        printf "  %-32s  %-9s  %-7s  %-9s  %-8s  %-10s  %s\n" \
+            "${tag}" "${variant}" "${kl:-N/A}" "${ops:-N/A}" "${iops:-N/A}" "${lat:-N/A}" "${hit:-N/A}" >> "${txt}"
+        echo "E4,${tag},${variant},${ops:-N/A},${iops:-N/A},${lat:-N/A},N/A,${hit:-N/A},N/A,N/A,N/A,N/A,$(if [[ -n "${iops:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
     done
 
     # ----- E5: Update bench keylen sensitivity -----
     cat >> "${txt}" <<EOF
 
 [E5] Update Key-Length Sensitivity
-  Tag                              KeyLen   UpdateNum   UpdateIOPS  HitRate(%)
+  Tag                              Variant    KeyLen   UpdateNum   UpdateIOPS  HitRate(%)
 EOF
-    for f in "${LOG_DIR}"/E5_*.log; do
+    for f in "${LOG_DIR}"/E5_*_AggreKV.log "${LOG_DIR}"/E5_*_RHIK.log; do
+        [[ ! -f "$f" ]] && continue
+        local variant="AggreKV"
+        if [[ "$f" == *_RHIK.log ]]; then variant="RHIK"; fi
         [[ ! -f "$f" ]] && continue
         local tag=$(basename "$f" .log)
         local kl=$(echo "${tag}" | grep -oP 'keylen\K[0-9]+')
@@ -560,9 +674,9 @@ EOF
         local upd_num=$(grep -oP 'update_num=\K[0-9]+' "$f" | head -1)
         local upd_iops=$(grep -oP 'update_iops=\K[\d.]+' "$f" | head -1)
         local hit=$(grep -oP 'hit_rt=\K[\d.]+' "$f" | head -1)
-        printf "  %-32s  %-7s  %-9s  %-10s  %s\n" \
-            "${tag}" "${kl:-N/A}" "${upd_num:-N/A}" "${upd_iops:-N/A}" "${hit:-N/A}" >> "${txt}"
-        echo "E5,${tag},${upd_num:-N/A},${upd_iops:-N/A},N/A,N/A,${hit:-N/A},N/A,N/A,N/A,N/A,$(if [[ -n "${upd_iops:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
+        printf "  %-32s  %-9s  %-7s  %-9s  %-10s  %s\n" \
+            "${tag}" "${variant}" "${kl:-N/A}" "${upd_num:-N/A}" "${upd_iops:-N/A}" "${hit:-N/A}" >> "${txt}"
+        echo "E5,${tag},${variant},${upd_num:-N/A},${upd_iops:-N/A},N/A,N/A,${hit:-N/A},N/A,N/A,N/A,N/A,$(if [[ -n "${upd_iops:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
     done
 
     # ----- E6/E7: YCSB A-F -----
@@ -570,9 +684,12 @@ EOF
         cat >> "${txt}" <<EOF
 
 [E${exp}] YCSB A-F
-  Tag                              Workload  TotalOps   AvgIOPS   AvgLat(us)  MaxLat(us)  HitRate(%)
+  Tag                              Variant    Workload  TotalOps   AvgIOPS   AvgLat(us)  MaxLat(us)  HitRate(%)
 EOF
-        for f in "${LOG_DIR}"/E${exp}_ycsb_*.log; do
+        for f in "${LOG_DIR}"/E${exp}_ycsb_*_AggreKV.log "${LOG_DIR}"/E${exp}_ycsb_*_RHIK.log; do
+            [[ ! -f "$f" ]] && continue
+            local variant="AggreKV"
+            if [[ "$f" == *_RHIK.log ]]; then variant="RHIK"; fi
             [[ ! -f "$f" ]] && continue
             local tag=$(basename "$f" .log)
             local wl=$(echo "${tag}" | grep -oP 'ycsb_\K[a-f]')
@@ -581,9 +698,9 @@ EOF
             local lat=$(grep -oP 'Avg latency:\s*\K[\d.]+' "$f" | head -1)
             local max=$(grep -oP 'Max latency:\s*\K[\d.]+' "$f" | head -1)
             local hit=$(grep -oP 'Cache Hit:\s*\K[\d.]+' "$f" | head -1)
-            printf "  %-32s  %-8s  %-9s  %-8s  %-10s  %-10s  %s\n" \
-                "${tag}" "${wl:-N/A}" "${ops:-N/A}" "${iops:-N/A}" "${lat:-N/A}" "${max:-N/A}" "${hit:-N/A}" >> "${txt}"
-            echo "E${exp},${tag},${ops:-N/A},${iops:-N/A},${lat:-N/A},${max:-N/A},${hit:-N/A},N/A,N/A,N/A,N/A,$(if [[ -n "${iops:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
+            printf "  %-32s  %-9s  %-8s  %-9s  %-8s  %-10s  %-10s  %s\n" \
+                "${tag}" "${variant}" "${wl:-N/A}" "${ops:-N/A}" "${iops:-N/A}" "${lat:-N/A}" "${max:-N/A}" "${hit:-N/A}" >> "${txt}"
+            echo "E${exp},${tag},${variant},${ops:-N/A},${iops:-N/A},${lat:-N/A},${max:-N/A},${hit:-N/A},N/A,N/A,N/A,N/A,$(if [[ -n "${iops:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
         done
     done
 
@@ -591,19 +708,22 @@ EOF
     cat >> "${txt}" <<EOF
 
 [E8] GC Wear
-  Tag                              TotalErased   SBLKsWithData
+  Tag                              Variant    TotalErased   SBLKsWithData
 EOF
-    for f in "${LOG_DIR}"/E8_*.log; do
+    for f in "${LOG_DIR}"/E8_*_AggreKV.log "${LOG_DIR}"/E8_*_RHIK.log; do
+        [[ ! -f "$f" ]] && continue
+        local variant="AggreKV"
+        if [[ "$f" == *_RHIK.log ]]; then variant="RHIK"; fi
         [[ ! -f "$f" ]] && continue
         local tag=$(basename "$f" .log)
         local total=$(grep "total GC erase count:" "$f" | sed 's/.*: //' | head -1)
         local sblk_n=$(grep -c "sblk\[" "$f" || true)
-        printf "  %-32s  %-12s  %s\n" "${tag}" "${total:-N/A}" "${sblk_n:-0}" >> "${txt}"
-        echo "E8,${tag},N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,$(if [[ -n "${total:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
+        printf "  %-32s  %-9s  %-12s  %s\n" "${tag}" "${variant}" "${total:-N/A}" "${sblk_n:-0}" >> "${txt}"
+        echo "E8,${tag},${variant},N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,$(if [[ -n "${total:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
     done
 
     # ----- E9: perf profile -----
-    if [[ -f "${LOG_DIR}/E9_perf_ycsb_a.log" ]]; then
+    if [[ -f "${LOG_DIR}/E9_perf_ycsb_a_AggreKV.log" || -f "${LOG_DIR}/E9_perf_ycsb_a_RHIK.log" ]]; then
         cat >> "${txt}" <<EOF
 
 [E9] Perf Profile (YCSB A)
@@ -636,21 +756,41 @@ echo "================================================"
 echo "Results dir: ${RESULTS_DIR}"
 echo "NUMA node:   ${NUMA_NODE}"
 echo "SMOKE mode:  ${SMOKE_MODE}"
+echo "Variant:     ${VARIANT_MODE}  (aggrekv | rhik | all)"
 if [[ ${#ONLY_EXPS[@]} -gt 0 ]]; then
     echo "Only run:    ${ONLY_EXPS[*]}"
 fi
 echo "================================================"
 
 
-should_run "E1" && exp1_read_throughput || echo "[skip E1]"
-should_run "E2" && exp2_update_throughput || echo "[skip E2]"
-should_run "E3" && exp3_tail_latency || echo "[skip E3]"
-should_run "E4" && exp4_ycsb_keylen || echo "[skip E4]"
-should_run "E5" && exp5_update_keylen || echo "[skip E5]"
-should_run "E6" && exp6_ycsb_full 6 "${E6_POOL_GB}" "${PROFILE_E6_CFLAGS}" "E6" "${E6_MAP_FRAC}" || echo "[skip E6]"
-should_run "E7" && exp6_ycsb_full 7 "${E7_POOL_GB}" "${PROFILE_E7_CFLAGS}" "E7" "${E7_MAP_FRAC}" || echo "[skip E7]"
-should_run "E8" && exp8_gc_wear || echo "[skip E8]"
-should_run "E9" && exp9_perf_profile || echo "[skip E9]"
+run_variant() {
+    local variant_label="$1"
+    export VARIANT_MODE_FLAG="${variant_label}"
+
+    if [[ "${VARIANT_MODE}" != "all" && "${VARIANT_MODE}" != "${variant_label,,}" ]]; then
+        return 0
+    fi
+
+    echo ""
+    echo "================================================================"
+    echo "  Running variant: ${variant_label}"
+    echo "================================================================"
+
+    should_run "E1" && exp1_read_throughput    || echo "[skip E1 ${variant_label}]"
+    should_run "E2" && exp2_update_throughput  || echo "[skip E2 ${variant_label}]"
+    should_run "E3" && exp3_tail_latency       || echo "[skip E3 ${variant_label}]"
+    should_run "E4" && exp4_ycsb_keylen        || echo "[skip E4 ${variant_label}]"
+    should_run "E5" && exp5_update_keylen      || echo "[skip E5 ${variant_label}]"
+    should_run "E6" && exp6_ycsb_full 6 "${E6_POOL_GB}" "$(pick_variant_cflags E6)" "E6" "$(pick_variant_frac_fixed ${E6_MAP_FRAC})" || echo "[skip E6 ${variant_label}]"
+    should_run "E7" && exp6_ycsb_full 7 "${E7_POOL_GB}" "$(pick_variant_cflags E7)" "E7" "$(pick_variant_frac_fixed ${E7_MAP_FRAC})" || echo "[skip E7 ${variant_label}]"
+    should_run "E8" && exp8_gc_wear            || echo "[skip E8 ${variant_label}]"
+    should_run "E9" && exp9_perf_profile       || echo "[skip E9 ${variant_label}]"
+}
+
+run_variant "AggreKV"
+run_variant "RHIK"
+
+unset VARIANT_MODE_FLAG
 
 echo ""
 echo "================================================"

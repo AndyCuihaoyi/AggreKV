@@ -17,7 +17,6 @@ This repository contains a user-space, kernel-bypass KV-SSD simulator written in
 | Field        | Value |
 |--------------|-------|
 | Title        | AggreKV: Boosting Hash-based KV-SSD Performance via Locality-Centric Optimizations |
-| Authors      | Zibin Sun, Fei Wu, Xiaogang Zhao, You Zhou |
 | Venue / Year | CASES 2026 (ESWEEK) |
 | Accepted PDF | https://cases26.hotcrp.com/paper/56 |
 

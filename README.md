@@ -39,7 +39,7 @@ AggreKV/
 ├── hash_kvssd/
 │   ├── Makefile
 │   ├── run_all_hashkvssd_tests.sh
-│   └── hash_hot_cmt/, lower/, tools/, scripts/, hash_kvssd_results/
+│   └── hash_hot_cmt/, lower/, tools/, scripts/, hash_kvssd_results/logs/
 │
 ├── lsmtree_kvssd/
 │   ├── Makefile
@@ -119,11 +119,11 @@ Each sub-driver writes to its own results directory:
 
 | Sub-module       | Output directory                              | Key summary file                                |
 |------------------|-----------------------------------------------|--------------------------------------------------|
-| `hash_kvssd`     | `hash_kvssd/hash_kvssd_results/`              | `summary/summary.txt`, `summary/summary.csv`     |
+| `hash_kvssd`     | `hash_kvssd/hash_kvssd_results/`              | per-(experiment, variant) `.log` files only; no aggregate summary file |
 | `lsmtree_kvssd`  | `lsmtree_kvssd/lsmtree_test_results/`         | `summary.txt`, per-workload `*.log` files |
 | `block_ssd`      | `block_ssd/blktrace_test_results/` and `block_ssd/blktrace_summary/` | `summary/summary_<timestamp>.txt` |
 
-A successful run means each script ran to completion and produced well-formed output under its own results directory. 
+A successful run means each script ran to completion and produced well-formed output under its own results directory. For the `hash_kvssd` sub-driver, per-experiment numbers live inside each log as `[SUMMARY]` lines; inspect them with `grep '\[SUMMARY\]' hash_kvssd/hash_kvssd_results/logs/*.log`. The `hash_kvssd` sub-driver intentionally does not write an aggregate summary file under Functional-badge review.
 
 ---
 

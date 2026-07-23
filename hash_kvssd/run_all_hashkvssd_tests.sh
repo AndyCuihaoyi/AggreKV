@@ -37,10 +37,15 @@
 #  Each variant produces its own log files and summary section, distinguished
 #  by the suffix _AggreKV or _RHIK on the log file name.
 #
-#  All results land in hash_kvssd_results/:
-#      logs/                  one .log per experiment, named by [EXP_TAG]
-#      summary/summary.txt    human-readable aggregate
-#      summary/summary.csv    CSV aggregate (pandas-friendly)
+#  All results land in hash_kvssd_results/logs/:
+#      <EXP_TAG>_<variant>.log   one log per (experiment, variant) cell,
+#                                suffixed with _AggreKV or _RHIK
+#      perf.data                 (E9 only) perf record output, kept as-is
+#
+#  No aggregate summary files are written. This artifact targets the
+#  Functional badge (script-execution passes); per-experiment numbers
+#  stay inside each log via [SUMMARY] markers and are greppable as
+#  `grep '\[SUMMARY\]' logs/*.log`.
 # ============================================================================
 set -euo pipefail
 
@@ -182,10 +187,11 @@ fi
 # ============================================================================
 RESULTS_DIR="hash_kvssd_results"
 LOG_DIR="${RESULTS_DIR}/logs"
-SUMMARY_DIR="${RESULTS_DIR}/summary"
+# No aggregate summary files are written (Functional badge only).
+SUMMARY_DIR=""
 # Clear previous results
 rm -rf "${RESULTS_DIR}"
-mkdir -p "${LOG_DIR}" "${SUMMARY_DIR}"
+mkdir -p "${LOG_DIR}"
 
 BIN="hash_hot_cmt/test_ext_mem_lat"
 
@@ -549,76 +555,61 @@ exp9_perf_profile() {
 }
 
 # ============================================================================
-# Summary: parse logs into summary.txt + summary.csv
+# Summary: print stats to stdout; no aggregate file written (Functional badge only)
 # ============================================================================
 summarize_all() {
-    local txt="${SUMMARY_DIR}/summary.txt"
-    local csv="${SUMMARY_DIR}/summary.csv"
-    : > "${txt}"
-    : > "${csv}"
+    # Functional badge: do not write aggregate summary files. Per-experiment
+    # numbers stay inside each log via [SUMMARY] markers and are greppable
+    # with `grep '\\[SUMMARY\\]' logs/*.log`.
+    local txt=""
+    local csv=""
 
-    cat > "${txt}" <<EOF
-========================================================================
- Hash-KVSSD (AggreKV) Test Suite — Summary
-========================================================================
-Run started:  $(date '+%Y-%m-%d %H:%M:%S %Z')
-NUMA node:    ${NUMA_NODE}
-SMOKE mode:   ${SMOKE_MODE}
-Variant:      ${VARIANT_MODE}  (aggrekv | rhik | all)
-Results dir:  ${RESULTS_DIR}
-========================================================================
-EOF
-
-    cat > "${csv}" <<EOF
-exp,tag,variant,total_ops,avg_iops,avg_lat_us,max_lat_us,hit_rate_pct,p95_us,p99_us,p99_9_us,p99_99_us,status
-EOF
+    echo ""
+    echo "========================================================================"
+    echo " Hash-KVSSD (AggreKV) Test Suite — Summary (not written to disk)"
+    echo "========================================================================"
+    echo "Run started:  $(date '+%Y-%m-%d %H:%M:%S %Z')"
+    echo "NUMA node:    ${NUMA_NODE}"
+    echo "SMOKE mode:   ${SMOKE_MODE}"
+    echo "Variant:      ${VARIANT_MODE}  (aggrekv | rhik | all)"
+    echo "Results dir:  ${RESULTS_DIR}"
+    echo "========================================================================"
 
     # ----- E1: read bench (read_iops= / hit_rt=) -----
-    cat >> "${txt}" <<EOF
-
-[E1] Read Throughput
-  Tag                              Variant    AvgIOPS   HitRate(%)
-EOF
+    echo ""
+    echo "[E1] Read Throughput"
+    echo "  Tag                              Variant    AvgIOPS   HitRate(%)"
     for f in "${LOG_DIR}"/E1_read_*_AggreKV.log "${LOG_DIR}"/E1_read_*_RHIK.log; do
         [[ ! -f "$f" ]] && continue
         local variant="AggreKV"
         if [[ "$f" == *_RHIK.log ]]; then variant="RHIK"; fi
-        [[ ! -f "$f" ]] && continue
         local tag=$(basename "$f" .log)
         local iops=$(grep -oP 'read_iops=\K[\d.]+' "$f" | head -1)
         local hit=$(grep -oP 'hit_rt=\K[\d.]+' "$f" | head -1)
-        printf "  %-32s  %-9s  %-9s  %s\n" "${tag}" "${variant}" "${iops:-N/A}" "${hit:-N/A}" >> "${txt}"
-        echo "E1,${tag},${variant},N/A,${iops:-N/A},N/A,N/A,${hit:-N/A},N/A,N/A,N/A,N/A,$(if [[ -n "${iops:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
+        printf "  %-32s  %-9s  %-9s  %s\n" "${tag}" "${variant}" "${iops:-N/A}" "${hit:-N/A}"
     done
 
     # ----- E2: update bench (update_iops=) -----
-    cat >> "${txt}" <<EOF
-
-[E2] Update Throughput
-  Tag                              Variant    AvgIOPS
-EOF
+    echo ""
+    echo "[E2] Update Throughput"
+    echo "  Tag                              Variant    AvgIOPS"
     for f in "${LOG_DIR}"/E2_update_*_AggreKV.log "${LOG_DIR}"/E2_update_*_RHIK.log; do
         [[ ! -f "$f" ]] && continue
         local variant="AggreKV"
         if [[ "$f" == *_RHIK.log ]]; then variant="RHIK"; fi
-        [[ ! -f "$f" ]] && continue
         local tag=$(basename "$f" .log)
         local iops=$(grep -oP 'update_iops=\K[\d.]+' "$f" | head -1)
-        printf "  %-32s  %-9s  %s\n" "${tag}" "${variant}" "${iops:-N/A}" >> "${txt}"
-        echo "E2,${tag},${variant},N/A,${iops:-N/A},N/A,N/A,N/A,N/A,N/A,N/A,N/A,$(if [[ -n "${iops:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
+        printf "  %-32s  %-9s  %s\n" "${tag}" "${variant}" "${iops:-N/A}"
     done
 
     # ----- E3: tail latency (avg_rlat/us: | p95_rlat/us: | ...) -----
-    cat >> "${txt}" <<EOF
-
-[E3] Tail Latency (iodepth=1, zipfian)
-  Tag                              Variant    Avg(us)   p95(us)   p99(us)   p99.9(us)  p99.99(us)
-EOF
+    echo ""
+    echo "[E3] Tail Latency (iodepth=1, zipfian)"
+    echo "  Tag                              Variant    Avg(us)   p95(us)   p99(us)   p99.9(us)  p99.99(us)"
     for f in "${LOG_DIR}"/E3_tail_*_AggreKV.log "${LOG_DIR}"/E3_tail_*_RHIK.log; do
         [[ ! -f "$f" ]] && continue
         local variant="AggreKV"
         if [[ "$f" == *_RHIK.log ]]; then variant="RHIK"; fi
-        [[ ! -f "$f" ]] && continue
         local tag=$(basename "$f" .log)
         local line=$(grep -m1 "avg_rlat/us:" "$f" || true)
         if [[ -n "${line}" ]]; then
@@ -626,25 +617,20 @@ EOF
                 for (i=2; i<=6; i++) gsub(/[^0-9]/, "", $i);
                 printf "%s %s %s %s %s\n", $2, $3, $4, $5, $6;
             }')
-            printf "  %-32s  %-9s  %s\n" "${tag}" "${variant}" "${vals}" >> "${txt}"
-            echo "E3,${tag},${variant},N/A,N/A,$(echo $vals | awk '{print $1}'),N/A,N/A,$(echo $vals | awk '{print $2}'),$(echo $vals | awk '{print $3}'),$(echo $vals | awk '{print $4}'),$(echo $vals | awk '{print $5}'),OK" >> "${csv}"
+            printf "  %-32s  %-9s  %s\n" "${tag}" "${variant}" "${vals}"
         else
-            printf "  %-32s  %-9s  N/A (no tail-latency line found)\n" "${tag}" "${variant}" >> "${txt}"
-            echo "E3,${tag},${variant},N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,FAIL" >> "${csv}"
+            printf "  %-32s  %-9s  N/A (no tail-latency line found)\n" "${tag}" "${variant}"
         fi
     done
 
     # ----- E4: YCSB keylen sensitivity -----
-    cat >> "${txt}" <<EOF
-
-[E4] YCSB Key-Length Sensitivity
-  Tag                              Variant    KeyLen   TotalOps   AvgIOPS   AvgLat(us)  HitRate(%)
-EOF
+    echo ""
+    echo "[E4] YCSB Key-Length Sensitivity"
+    echo "  Tag                              Variant    KeyLen   TotalOps   AvgIOPS   AvgLat(us)  HitRate(%)"
     for f in "${LOG_DIR}"/E4_*_AggreKV.log "${LOG_DIR}"/E4_*_RHIK.log; do
         [[ ! -f "$f" ]] && continue
         local variant="AggreKV"
         if [[ "$f" == *_RHIK.log ]]; then variant="RHIK"; fi
-        [[ ! -f "$f" ]] && continue
         local tag=$(basename "$f" .log)
         local kl=$(echo "${tag}" | grep -oP 'keylen\K[0-9]+')
         local ops=$(grep -oP 'Total ops:\s*\K[\d.]+' "$f" | head -1)
@@ -652,21 +638,17 @@ EOF
         local lat=$(grep -oP 'Avg latency:\s*\K[\d.]+' "$f" | head -1)
         local hit=$(grep -oP 'Cache Hit:\s*\K[\d.]+' "$f" | head -1)
         printf "  %-32s  %-9s  %-7s  %-9s  %-8s  %-10s  %s\n" \
-            "${tag}" "${variant}" "${kl:-N/A}" "${ops:-N/A}" "${iops:-N/A}" "${lat:-N/A}" "${hit:-N/A}" >> "${txt}"
-        echo "E4,${tag},${variant},${ops:-N/A},${iops:-N/A},${lat:-N/A},N/A,${hit:-N/A},N/A,N/A,N/A,N/A,$(if [[ -n "${iops:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
+            "${tag}" "${variant}" "${kl:-N/A}" "${ops:-N/A}" "${iops:-N/A}" "${lat:-N/A}" "${hit:-N/A}"
     done
 
     # ----- E5: Update bench keylen sensitivity -----
-    cat >> "${txt}" <<EOF
-
-[E5] Update Key-Length Sensitivity
-  Tag                              Variant    KeyLen   UpdateNum   UpdateIOPS  HitRate(%)
-EOF
+    echo ""
+    echo "[E5] Update Key-Length Sensitivity"
+    echo "  Tag                              Variant    KeyLen   UpdateNum   UpdateIOPS  HitRate(%)"
     for f in "${LOG_DIR}"/E5_*_AggreKV.log "${LOG_DIR}"/E5_*_RHIK.log; do
         [[ ! -f "$f" ]] && continue
         local variant="AggreKV"
         if [[ "$f" == *_RHIK.log ]]; then variant="RHIK"; fi
-        [[ ! -f "$f" ]] && continue
         local tag=$(basename "$f" .log)
         local kl=$(echo "${tag}" | grep -oP 'keylen\K[0-9]+')
         # update_bench SUMMARY line format:
@@ -675,22 +657,18 @@ EOF
         local upd_iops=$(grep -oP 'update_iops=\K[\d.]+' "$f" | head -1)
         local hit=$(grep -oP 'hit_rt=\K[\d.]+' "$f" | head -1)
         printf "  %-32s  %-9s  %-7s  %-9s  %-10s  %s\n" \
-            "${tag}" "${variant}" "${kl:-N/A}" "${upd_num:-N/A}" "${upd_iops:-N/A}" "${hit:-N/A}" >> "${txt}"
-        echo "E5,${tag},${variant},${upd_num:-N/A},${upd_iops:-N/A},N/A,N/A,${hit:-N/A},N/A,N/A,N/A,N/A,$(if [[ -n "${upd_iops:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
+            "${tag}" "${variant}" "${kl:-N/A}" "${upd_num:-N/A}" "${upd_iops:-N/A}" "${hit:-N/A}"
     done
 
     # ----- E6/E7: YCSB A-F -----
     for exp in 6 7; do
-        cat >> "${txt}" <<EOF
-
-[E${exp}] YCSB A-F
-  Tag                              Variant    Workload  TotalOps   AvgIOPS   AvgLat(us)  MaxLat(us)  HitRate(%)
-EOF
+        echo ""
+        echo "[E${exp}] YCSB A-F"
+        echo "  Tag                              Variant    Workload  TotalOps   AvgIOPS   AvgLat(us)  MaxLat(us)  HitRate(%)"
         for f in "${LOG_DIR}"/E${exp}_ycsb_*_AggreKV.log "${LOG_DIR}"/E${exp}_ycsb_*_RHIK.log; do
             [[ ! -f "$f" ]] && continue
             local variant="AggreKV"
             if [[ "$f" == *_RHIK.log ]]; then variant="RHIK"; fi
-            [[ ! -f "$f" ]] && continue
             local tag=$(basename "$f" .log)
             local wl=$(echo "${tag}" | grep -oP 'ycsb_\K[a-f]')
             local ops=$(grep -oP 'Total ops:\s*\K[\d.]+' "$f" | head -1)
@@ -699,52 +677,39 @@ EOF
             local max=$(grep -oP 'Max latency:\s*\K[\d.]+' "$f" | head -1)
             local hit=$(grep -oP 'Cache Hit:\s*\K[\d.]+' "$f" | head -1)
             printf "  %-32s  %-9s  %-8s  %-9s  %-8s  %-10s  %-10s  %s\n" \
-                "${tag}" "${variant}" "${wl:-N/A}" "${ops:-N/A}" "${iops:-N/A}" "${lat:-N/A}" "${max:-N/A}" "${hit:-N/A}" >> "${txt}"
-            echo "E${exp},${tag},${variant},${ops:-N/A},${iops:-N/A},${lat:-N/A},${max:-N/A},${hit:-N/A},N/A,N/A,N/A,N/A,$(if [[ -n "${iops:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
+                "${tag}" "${variant}" "${wl:-N/A}" "${ops:-N/A}" "${iops:-N/A}" "${lat:-N/A}" "${max:-N/A}" "${hit:-N/A}"
         done
     done
 
     # ----- E8: GC wear (total GC erase count / sblk[N]: gc_cnt=) -----
-    cat >> "${txt}" <<EOF
-
-[E8] GC Wear
-  Tag                              Variant    TotalErased   SBLKsWithData
-EOF
+    echo ""
+    echo "[E8] GC Wear"
+    echo "  Tag                              Variant    TotalErased   SBLKsWithData"
     for f in "${LOG_DIR}"/E8_*_AggreKV.log "${LOG_DIR}"/E8_*_RHIK.log; do
         [[ ! -f "$f" ]] && continue
         local variant="AggreKV"
         if [[ "$f" == *_RHIK.log ]]; then variant="RHIK"; fi
-        [[ ! -f "$f" ]] && continue
         local tag=$(basename "$f" .log)
         local total=$(grep "total GC erase count:" "$f" | sed 's/.*: //' | head -1)
         local sblk_n=$(grep -c "sblk\[" "$f" || true)
-        printf "  %-32s  %-9s  %-12s  %s\n" "${tag}" "${variant}" "${total:-N/A}" "${sblk_n:-0}" >> "${txt}"
-        echo "E8,${tag},${variant},N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,$(if [[ -n "${total:-}" ]]; then echo OK; else echo FAIL; fi)" >> "${csv}"
+        printf "  %-32s  %-9s  %-12s  %s\n" "${tag}" "${variant}" "${total:-N/A}" "${sblk_n:-0}"
     done
 
     # ----- E9: perf profile -----
     if [[ -f "${LOG_DIR}/E9_perf_ycsb_a_AggreKV.log" || -f "${LOG_DIR}/E9_perf_ycsb_a_RHIK.log" ]]; then
-        cat >> "${txt}" <<EOF
-
-[E9] Perf Profile (YCSB A)
-  Log: ${LOG_DIR}/E9_perf_ycsb_a.log
-  Perf data: ${LOG_DIR}/perf.data
-EOF
+        echo ""
+        echo "[E9] Perf Profile (YCSB A)"
+        echo "  Log: ${LOG_DIR}/E9_perf_ycsb_a_AggreKV.log (or _RHIK.log)"
+        echo "  Perf data: ${LOG_DIR}/perf.data"
     fi
 
-    cat >> "${txt}" <<EOF
-
-========================================================================
-Finished at: $(date)
-========================================================================
-EOF
-
     echo ""
-    echo "===================== summary.txt ====================="
-    cat "${txt}"
+    echo "========================================================================"
+    echo "Finished at: $(date)"
+    echo "========================================================================"
     echo ""
-    echo "===================== summary.csv ====================="
-    cat "${csv}"
+    echo "Aggregate summary: not written to disk (Functional badge only)."
+    echo "Per-experiment numbers are available via: grep '\\[SUMMARY\\]' \"${LOG_DIR}\"/*.log"
 }
 
 # ============================================================================
@@ -798,7 +763,16 @@ echo " Summarizing..."
 echo "================================================"
 summarize_all
 
+# Functional badge: drop the per-binary CSV files that
+# emit_read_bench_summary / emit_update_bench_summary write into
+# hash_kvssd_results/ (see hash_kvssd/test_ext_mem_lat.c). The
+# numbers they carry are still inside each log via [SUMMARY] lines.
+if [[ -d "${RESULTS_DIR}" ]]; then
+    find "${RESULTS_DIR}" -maxdepth 1 -type f \
+        \( -name 'read_test_summary.csv' -o -name 'update_test_summary.csv' \) \
+        -delete 2>/dev/null || true
+fi
+
 echo ""
 echo "All logs:     ${LOG_DIR}/"
-echo "Summary txt:  ${SUMMARY_DIR}/summary.txt"
-echo "Summary csv:  ${SUMMARY_DIR}/summary.csv"
+echo "Summary:      (no aggregate file written; Functional badge only)"

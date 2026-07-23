@@ -27,7 +27,6 @@
 #
 #  全部结果落在  all_test_results_<timestamp>/  下：
 #      logs/                 每实验一个 .log（按 [EXP_TAG] 分组）
-#      summary/config.txt    本次运行配置（宏、NUMA、时间戳）
 #      summary/summary.txt   汇总表（人读）
 #      summary/summary.csv   汇总表（CSV，可导入 pandas）
 # ============================================================================
@@ -61,6 +60,11 @@ E6_MAP_FRAC=0.5000
 E7_POOL_GB=256
 E7_MAP_FRAC=1.0000
 E6_E7_YCSB_OPS=4000000
+# YCSB 'e' (range scans) on full-size pools emits very large read sets that
+# overflow the binary's tracking range and produce N/A in the summary.
+# For E6/E7 only, run YCSB 'e' at 1/100 ops so it stays in range. The log
+# filename keeps the original tag (E6 / E7) so downstream parsing is unchanged.
+E6_E7_YCSB_OPS_E=$((E6_E7_YCSB_OPS / 100))
 
 # Update / Read 操作数（原 16M/64M/10M 缩放到 1/8；文件名/tag 不变）
 UPDATE_NUM_POOL=$((2 * NR_G))    # 原 16M → 2,097,152 (≈2M)
@@ -382,11 +386,17 @@ exp6_ycsb_full() {
     build_aggrekv "${profile_cflags}" || return 1
     local pool=$((pool_gb * NR_G))
     for w in a b c d e f; do
+        # YCSB 'e' uses a smaller op count (see E6_E7_YCSB_OPS_E) to keep
+        # its range-scan footprint within the binary's tracking range.
+        local w_ops="${E6_E7_YCSB_OPS}"
+        if [[ "${w}" == "e" ]]; then
+            w_ops="${E6_E7_YCSB_OPS_E}"
+        fi
         run_one "${exp_id}" "ycsb_${w}_pool${pool_gb}G_${ycsb_tag}" \
             "E${exp_id}_ycsb_${w}_pool${pool_gb}G_${ycsb_tag}" \
             --pool_size "${pool}" \
             --ycsb "${w}" \
-            --ycsb_ops "${E6_E7_YCSB_OPS}" \
+            --ycsb_ops "${w_ops}" \
             --map_size_frac "${map_frac}" \
             --keylen_mean 32 \
             --variable_keylen
@@ -627,47 +637,6 @@ EOF
 # ============================================================================
 # 配置落盘
 # ============================================================================
-dump_config() {
-    local cfg="${SUMMARY_DIR}/config.txt"
-    cat > "${cfg}" <<EOF
-========================================================================
- Hash-KVSSD (AggreKV) Test Configuration
-========================================================================
-Run started:    $(date '+%Y-%m-%d %H:%M:%S %Z')
-NUMA node:      ${NUMA_NODE}
-SMOKE mode:     ${SMOKE_MODE}
-Results dir:    ${RESULTS_DIR}
-
---- Production defaults (non-smoke) ---
-NR_G:           ${NR_G}
-POOLS_G:        ${POOLS_G[*]}
-POOL_FRACS:     ${POOL_FRACS[*]}
-KEYLENS:        ${KEYLENS[*]}
-YCSB_OPS:       ${YCSB_OPS}
-YCSB_OPS_KEYLEN:${YCSB_OPS_KEYLEN}
-YCSB_OPS_PERF:  ${YCSB_OPS_PERF}
-UPDATE_NUM_POOL:${UPDATE_NUM_POOL}
-UPDATE_NUM_KEYLEN:${UPDATE_NUM_KEYLEN}
-UPDATE_NUM_GC:  ${UPDATE_NUM_GC}
-GC_WEAR_POOL_GB:${GC_WEAR_POOL_GB}
-
---- Compile profiles ---
-E1 CFLAGS: ${PROFILE_E1_CFLAGS}
-E2 CFLAGS: ${PROFILE_E2_CFLAGS}
-E3 CFLAGS: ${PROFILE_E3_CFLAGS}
-E4 CFLAGS: ${PROFILE_E4_CFLAGS}
-E5 CFLAGS: ${PROFILE_E5_CFLAGS}
-E6 CFLAGS: ${PROFILE_E6_CFLAGS}
-E7 CFLAGS: ${PROFILE_E7_CFLAGS}
-E8 CFLAGS: ${PROFILE_E8_CFLAGS}
-E9 CFLAGS: ${PROFILE_E9_CFLAGS}
-
---- Selected experiments ---
-ONLY_EXPS: ${ONLY_EXPS[*]:-(all)}
-========================================================================
-EOF
-}
-
 # ============================================================================
 # Main
 # ============================================================================
@@ -682,7 +651,6 @@ if [[ ${#ONLY_EXPS[@]} -gt 0 ]]; then
 fi
 echo "================================================"
 
-dump_config
 
 should_run "E1" && exp1_read_throughput || echo "[skip E1]"
 should_run "E2" && exp2_update_throughput || echo "[skip E2]"
@@ -704,4 +672,3 @@ echo ""
 echo "All logs:     ${LOG_DIR}/"
 echo "Summary txt:  ${SUMMARY_DIR}/summary.txt"
 echo "Summary csv:  ${SUMMARY_DIR}/summary.csv"
-echo "Config:       ${SUMMARY_DIR}/config.txt"

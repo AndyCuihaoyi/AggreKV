@@ -12,11 +12,11 @@ The artifact is a user-space, kernel-bypass KV-SSD simulator. All "SSD" behaviou
 |-------------|-------------|
 | CPU         | 16+ physical cores, x86_64 |
 | RAM         | 256 GB |
-| NUMA        | Single NUMA node — bind the run to one node. Running across multiple NUMA nodes introduces cross-NUMA memory-access latency that is not modelled by the simulator, so cross-NUMA runs will not match the paper's numbers. |
+| NUMA        | Single NUMA node — bind the run to one node. Running across multiple NUMA nodes introduces cross-NUMA memory-access latency that is not modelled by the simulator. |
 | Disk (free) | 100 GB at the location where the repo is cloned (the blktrace dataset alone is 6.2 GB; per-experiment result directories add several more GB). |
 | Storage I/O | SSD-class (the simulator itself is DRAM-resident, but the build and the per-experiment log writes benefit from SSD-class I/O). |
 
-If the recommended RAM is not available, the simulator may spill into swap. Swapping changes wall-clock latency by orders of magnitude and the resulting numbers will not match the paper. If swap activity is observed (`vmstat 1` shows non-zero `si`/`so` columns during a run), the run should be considered invalid for any cross-machine comparison; the Functional badge does, however, still pass as long as the scripts execute to completion and produce well-formed output.
+If the recommended RAM is not available, the simulator may spill into swap. Swapping changes wall-clock latency by orders of magnitude and the resulting numbers will not match the paper.
 
 ---
 
@@ -28,7 +28,7 @@ If the recommended RAM is not available, the simulator may spill into swap. Swap
 | Compiler    | `gcc` 11.4 (`-std=gnu11` or newer) |
 | Build tools | GNU `make` 4.3, POSIX `bash` 5.x |
 | Libraries   | `libglib2.0-dev` 2.72 (required by the `hash_kvssd` baseline; `block_ssd` and `lsmtree_kvssd` only link against `-lglib-2.0`, so on Debian/Ubuntu they don't strictly need the dev headers) |
-| Tools       | `numactl` (optional; if absent, scripts fall back to `taskset -c 0` for the `hash_kvssd` baseline; the `lsmtree_kvssd` and `block_ssd` baselines do not need it) |
+| Tools       | `numactl` (optional; if absent, scripts fall back to `taskset -c 0` for the `hash_kvssd` baseline) |
 
 The single `apt install` line that covers everything:
 
@@ -37,11 +37,10 @@ sudo apt update
 sudo apt install -y build-essential libglib2.0-dev numactl
 ```
 
-If `numactl` is not available in your distribution, omit it from the line above; the `hash_kvssd` sub-driver will print a warning and fall back to `taskset -c 0`.
 
 ### Tested platform
 
-The artifact is built and run on the following platform:
+The artifact is built and runs on the following platform:
 
 - Ubuntu 22.04 LTS (kernel 5.15), gcc 11.4, GNU make 4.3, bash 5.1, libglib 2.72, on a dual-socket Intel Xeon Gold 6430 with 218 GiB RAM, bound to a single NUMA node for every run.
 

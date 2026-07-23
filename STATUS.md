@@ -51,7 +51,7 @@ This artifact is associated with **two** Zenodo records, each carrying its own D
 
 | Object         | Record URL                                          | DOI                       |
 |----------------|-----------------------------------------------------|---------------------------|
-| Source code (this GitHub repository) | https://zenodo.org/records/<TODO: source record id>     | `<TODO: source DOI>`      |
+| Source code (this GitHub repository) | https://zenodo.org/records/21502922     | `10.5281/zenodo.21502922`      |
 | Blktrace dataset | <https://zenodo.org/records/21455311>             | `10.5281/zenodo.21455311` |
 
 The source-code record is created automatically by Zenodo's GitHub-integration workflow when the `v1.0.0` tag is pushed to GitHub. The blktrace-dataset record was published manually with a separate DOI because the 6.2 GB dataset exceeds Zenodo's per-record download-archive size limit. Reviewers cite both DOIs in any derivative work.

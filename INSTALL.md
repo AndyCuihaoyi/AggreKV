@@ -25,8 +25,6 @@ sudo apt install -y build-essential libglib2.0-dev numactl
 | `libglib2.0-dev`      | Required by the `hash_kvssd` baseline (its build script hard-codes the glib headers path) |
 | `numactl`             | Optional; if absent, the `hash_kvssd` sub-driver falls back to `taskset -c 0`        |
 
-If `numactl` is not available in your distribution, omit it from the line above; the `hash_kvssd` sub-driver will print a warning and fall back to `taskset -c 0`.
-
 ---
 
 ## 2. Obtain the source

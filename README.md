@@ -1,5 +1,7 @@
 # AggreKV
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21502922.svg)](https://doi.org/10.5281/zenodo.21502922)
+
 Source tree for the paper *AggreKV: Boosting Hash-based KV-SSD Performance via Locality-Centric Optimizations*.
 
 This repository contains a user-space, kernel-bypass KV-SSD simulator written in C and ships three independent implementations:

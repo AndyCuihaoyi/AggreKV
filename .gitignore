@@ -86,3 +86,9 @@ hash_kvssd/hash_hot_cmt/.nfs*
 .agents/
 .vscode/
 compile_commands.json
+
+# --- Artifact Appendix (LaTeX working copy) ---
+# Authors paste the contents of this file into their paper .tex source
+# and regenerate paper_with_appendix.pdf for the CASES 2026 AE HotCRP
+# upload. The file itself is a working copy, not part of the artifact.
+ARTIFACT_APPENDIX.tex
